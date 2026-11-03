@@ -1,0 +1,10 @@
+streamlit
+pandas
+pypdf
+pypdfium2
+pytesseract
+python-docx
+fpdf2
+requests
+openpyxl
+pyinstaller
