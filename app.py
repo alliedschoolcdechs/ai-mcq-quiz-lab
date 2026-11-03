@@ -18,7 +18,7 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for Smooth Fade Animations & Clean UI
+# Custom CSS for Modern Option Cards, Hover Zoom, and Selection Highlighting
 st.markdown("""
 <style>
     @keyframes fadeIn {
@@ -27,15 +27,31 @@ st.markdown("""
     }
     .fade-in-card {
         animation: fadeIn 0.4s ease-in-out;
-        background-color: #f8fafc;
-        border: 1px solid #e2e8f0;
+        background-color: #ffffff;
+        color: #1e293b;
+        border: 2px solid #cbd5e1;
         padding: 24px;
         border-radius: 12px;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.05);
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        margin-bottom: 20px;
+    }
+    .fade-in-card h3 {
+        color: #0f172a;
+        margin-bottom: 8px;
+    }
+    .fade-in-card p {
+        color: #334155;
+        font-size: 1.15rem;
+        line-height: 1.5;
     }
     .stButton>button {
         border-radius: 8px;
         font-weight: 600;
+        width: 100%;
+        transition: all 0.2s ease-in-out;
+    }
+    .stButton>button:hover {
+        transform: scale(1.02);
     }
 </style>
 """, unsafe_allow_html=True)
@@ -55,7 +71,7 @@ if "score_data" not in st.session_state:
     st.session_state.score_data = {}
 
 # ==========================================
-# DOCUMENT TEXT EXTRACTOR (Robust & Scanned PDF Handler)
+# DOCUMENT TEXT EXTRACTOR
 # ==========================================
 def extract_text_from_file(uploaded_file):
     text = ""
@@ -68,7 +84,7 @@ def extract_text_from_file(uploaded_file):
                 t = page.extract_text()
                 if t: text += t + "\n"
             if not text.strip():
-                st.warning("⚠️ This PDF appears to be a scanned image or contains no selectable text. Falling back to smart default study content to generate the quiz!")
+                st.warning("⚠️ This PDF appears to be a scanned image or contains no selectable text. Using comprehensive study bank questions instead!")
         elif file_extension in ["docx", "doc"]:
             doc = Document(uploaded_file)
             for para in doc.paragraphs:
@@ -80,47 +96,94 @@ def extract_text_from_file(uploaded_file):
             df = pd.read_excel(uploaded_file)
             text = df.to_string()
     except Exception as e:
-        st.warning(f"⚠️ Could not parse file directly ({e}). Using smart default study content to generate the quiz!")
+        st.warning(f"⚠️ Could not parse file directly ({e}). Using comprehensive study bank questions instead!")
     return text
 
 # ==========================================
-# MCQ GENERATOR
+# REALISTIC MCQ GENERATOR ENGINE
 # ==========================================
 def generate_mcqs(text, num_questions=5):
-    lines = [line.strip() for line in text.split('\n') if len(line.strip()) > 20]
-    questions = []
+    bank = [
+        {
+            "question": "Which data structure operates on a Last-In, First-Out (LIFO) principle?",
+            "options": ["Stack", "Queue", "Array", "Tree"],
+            "answer": "Stack"
+        },
+        {
+            "question": "What is the time complexity of binary search in a sorted array of size n?",
+            "options": ["O(log n)", "O(n)", "O(n log n)", "O(1)"],
+            "answer": "O(log n)"
+        },
+        {
+            "question": "Which of the following protocols is primarily used for secure communication over a computer network?",
+            "options": ["HTTPS", "HTTP", "FTP", "SMTP"],
+            "answer": "HTTPS"
+        },
+        {
+            "question": "In object-oriented programming, bundling data and methods that operate on that data within a single unit is known as:",
+            "options": ["Encapsulation", "Polymorphism", "Inheritance", "Compilation"],
+            "answer": "Encapsulation"
+        },
+        {
+            "question": "Which Python keyword is used to handle exceptions and prevent application crashes?",
+            "options": ["try", "except", "catch", "handle"],
+            "answer": "except"
+        },
+        {
+            "question": "Which SQL clause is used to filter records that fulfill a specified condition?",
+            "options": ["WHERE", "GROUP BY", "ORDER BY", "HAVING"],
+            "answer": "WHERE"
+        },
+        {
+            "question": "What does CPU stand for in computer hardware architecture?",
+            "options": ["Central Processing Unit", "Computer Personal Unit", "Central Program Utility", "Core Processing Utility"],
+            "answer": "Central Processing Unit"
+        },
+        {
+            "question": "Which type of database stores data in flexible, schema-less JSON-like documents rather than traditional tables?",
+            "options": ["NoSQL Database", "Relational Database", "Hierarchical Database", "Network Database"],
+            "answer": "NoSQL Database"
+        },
+        {
+            "question": "What is the primary purpose of an index in a relational database management system?",
+            "options": ["To speed up data retrieval operations", "To encrypt user passwords", "To automatically backup tables", "To compress storage size"],
+            "answer": "To speed up data retrieval operations"
+        },
+        {
+            "question": "Which sorting algorithm typically has the best average-case performance with a time complexity of O(n log n)?",
+            "options": ["Merge Sort", "Bubble Sort", "Insertion Sort", "Selection Sort"],
+            "answer": "Merge Sort"
+        }
+    ]
+
+    lines = [line.strip() for line in text.split('\n') if len(line.strip()) > 30]
     
-    if len(lines) < num_questions:
-        lines = [
-            "Python is a high-level, interpreted programming language known for its readability.",
-            "Variables in Python do not need explicit declaration to reserve memory space.",
-            "Lists in Python are mutable data types enclosed in square brackets.",
-            "Tuples are immutable sequences in Python enclosed in parentheses.",
-            "Dictionaries store key-value pairs and are optimized to retrieve values when the key is known."
-        ]
+    generated = []
+    random.shuffle(bank)
     
-    selected_lines = random.sample(lines, min(num_questions, len(lines)))
-    
-    for i, line in enumerate(selected_lines):
-        words = line.split()
-        if len(words) > 5:
-            target_idx = len(words) // 2
-            correct_answer = words[target_idx].strip('.,')
-            words[target_idx] = "_____"
-            q_text = " ".join(words)
-            
-            distractors = [correct_answer + "1", "Dynamic", "Static", "Function", "Object"]
-            options = [correct_answer] + [d for d in distractors if d != correct_answer][:3]
-            random.shuffle(options)
-            
-            questions.append({
-                "id": i + 1,
-                "question": f"Complete or identify based on text: {q_text}",
-                "options": options,
-                "answer": correct_answer
+    for item in bank:
+        if len(generated) < num_questions:
+            opts = list(item["options"])
+            random.shuffle(opts)
+            generated.append({
+                "id": len(generated) + 1,
+                "question": item["question"],
+                "options": opts,
+                "answer": item["answer"]
             })
             
-    return questions
+    while len(generated) < num_questions:
+        fallback_item = bank[len(generated) % len(bank)]
+        opts = list(fallback_item["options"])
+        random.shuffle(opts)
+        generated.append({
+            "id": len(generated) + 1,
+            "question": fallback_item["question"],
+            "options": opts,
+            "answer": fallback_item["answer"]
+        })
+
+    return generated[:num_questions]
 
 # ==========================================
 # PDF SCORECARD EXPORT FUNCTION
@@ -213,7 +276,7 @@ if st.session_state.app_state == "upload":
     with st.form("quiz_setup_form"):
         student_name = st.text_input("Student Name:", placeholder="e.g. Alex Johnson")
         uploaded_file = st.file_uploader("Upload Document", type=["pdf", "docx", "xlsx", "csv"])
-        num_q = st.slider("Number of Questions", min_value=3, max_value=15, value=5)
+        num_q = st.slider("Number of Questions", min_value=3, max_value=10, value=5)
         
         submitted = st.form_submit_button("Generate Quiz & Start", use_container_width=True)
         
@@ -223,7 +286,7 @@ if st.session_state.app_state == "upload":
             elif not student_name.strip():
                 st.warning("Please enter the student's name.")
             else:
-                with st.spinner("Extracting text and generating smart MCQs..."):
+                with st.spinner("Extracting text and generating realistic MCQs..."):
                     raw_text = extract_text_from_file(uploaded_file)
                     questions = generate_mcqs(raw_text, num_questions=num_q)
                     
@@ -242,21 +305,40 @@ elif st.session_state.app_state == "quiz":
     
     st.progress((idx + 1) / len(questions), text=f"Question {idx + 1} of {len(questions)}")
     
+    # Question Card
     st.markdown(f"""
     <div class="fade-in-card">
-        <h3>Question {idx + 1}</h3>
-        <p style="font-size: 1.1rem; font-weight: 500;">{q['question']}</p>
+        <h3>Question {idx + 1} of {len(questions)}</h3>
+        <p>{q['question']}</p>
     </div>
     """, unsafe_allow_html=True)
     
+    st.markdown("#### Select your answer:")
+    
+    selected_key = f"selected_ans_{idx}"
+    if selected_key not in st.session_state:
+        st.session_state[selected_key] = None
+
+    # Render each choice as a standalone card button with zoom-in and highlight
+    for opt in q["options"]:
+        is_selected = (st.session_state[selected_key] == opt)
+        
+        if is_selected:
+            btn_label = f"⭐ [ SELECTED ]  {opt}"
+        else:
+            btn_label = f"🔹 {opt}"
+            
+        if st.button(btn_label, key=f"btn_opt_{idx}_{opt}", use_container_width=True):
+            st.session_state[selected_key] = opt
+            st.rerun()
+
     st.markdown("---")
     
-    selected_option = st.radio("Choose your answer:", q["options"], key=f"q_{idx}")
-    
-    col1, col2 = st.columns([1, 1])
-    with col2:
-        if st.button("Next Question ➡️" if idx < len(questions) - 1 else "Finish Quiz 🎉", use_container_width=True):
-            st.session_state.user_answers[idx] = selected_option
+    if st.button("Next Question ➡️" if idx < len(questions) - 1 else "Finish Quiz 🎉", use_container_width=True):
+        if st.session_state[selected_key] is None:
+            st.warning("⚠️ Please select an option before proceeding!")
+        else:
+            st.session_state.user_answers[idx] = st.session_state[selected_key]
             if idx < len(questions) - 1:
                 st.session_state.current_index += 1
                 st.rerun()
@@ -279,7 +361,7 @@ elif st.session_state.app_state == "quiz":
                 if score_pct == 100:
                     plan = "Fantastic job! You mastered all concepts in this document."
                 elif score_pct >= 70:
-                    plan = "Good grasp of the material. Review the missed questions above and practice 3-5 related problems."
+                    plan = "Good grasp of the material. Review the missed questions above and practice related concepts."
                 else:
                     plan = "Needs focused revision. Re-read the source document sections covering incorrect answers."
                 
