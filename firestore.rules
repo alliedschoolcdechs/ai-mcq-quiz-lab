@@ -1,0 +1,78 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/adminMembers/$(request.auth.uid))
+        && get(/databases/$(database)/documents/adminMembers/$(request.auth.uid)).data.active == true;
+    }
+
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'photoUrl', 'createdAt',
+          'lastLoginAt', 'lastAttemptAt', 'lastAttemptId',
+          'lastScorePct', 'lastAttemptGraded'
+        ]);
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.uid == resource.data.uid
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.keys().hasOnly([
+          'uid', 'email', 'displayName', 'photoUrl', 'createdAt',
+          'lastLoginAt', 'lastAttemptAt', 'lastAttemptId',
+          'lastScorePct', 'lastAttemptGraded'
+        ])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'displayName', 'photoUrl', 'lastLoginAt', 'lastAttemptAt',
+          'lastAttemptId', 'lastScorePct', 'lastAttemptGraded'
+        ]);
+      allow delete: if false;
+    }
+
+    match /attempts/{attemptId} {
+      allow read: if signedIn()
+        && (resource.data.uid == request.auth.uid || isAdmin());
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          'attemptId', 'uid', 'email', 'displayName', 'studentName',
+          'fileName', 'quizMode', 'questionSource', 'graded', 'scorePct',
+          'correctCount', 'total', 'startedAt', 'completedAt',
+          'durationSeconds', 'answers'
+        ])
+        && request.resource.data.attemptId == attemptId
+        && request.resource.data.uid == request.auth.uid
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.graded is bool
+        && request.resource.data.total is int
+        && request.resource.data.total > 0
+        && request.resource.data.durationSeconds is int
+        && request.resource.data.answers is list
+        && request.resource.data.answers.size() == request.resource.data.total
+        && (
+          request.resource.data.scorePct == null
+          || (
+            request.resource.data.scorePct is int
+            && request.resource.data.scorePct >= 0
+            && request.resource.data.scorePct <= 100
+          )
+        );
+      allow update, delete: if false;
+    }
+
+    match /adminMembers/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+  }
+}

@@ -1,0 +1,27 @@
+# Credentials and local settings
+firebase_config.json
+.env
+.env.*
+!.env.example
+
+# Local study materials and user data
+library/*
+!library/.gitkeep
+*.sqlite
+*.db
+
+# Python environments and generated files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+# Build artifacts (except the requested distributable executable)
+build/
+dist/*
+!dist/AI_Quiz_Lab.exe
+
+# Editor and OS files
+.vscode/
+.DS_Store
+Thumbs.db

@@ -1,0 +1,145 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-auth-compat.js"></script>
+  <style>
+    body { margin: 0; color: #eef2ff; font: 14px system-ui, sans-serif; background: transparent; }
+    .card { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+    button { border: 0; border-radius: 8px; padding: 10px 16px; color: white; font-weight: 650; background: #6558f5; cursor: pointer; }
+    button:hover { background: #766cff; }
+    button:disabled { opacity: .65; cursor: wait; }
+    .error { margin-top: 8px; color: #fca5a5; }
+    .identity { overflow-wrap: anywhere; }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    const root = document.getElementById("root");
+    const streamlitOrigin = document.referrer
+      ? new URL(document.referrer).origin
+      : window.location.origin;
+    const send = (value) => window.parent.postMessage({
+      isStreamlitMessage: true,
+      type: "streamlit:setComponentValue",
+      value,
+      dataType: "json"
+    }, streamlitOrigin);
+    let auth = null;
+    let currentArgs = null;
+    let lastLogoutNonce = null;
+
+    function render() {
+      if (!currentArgs) return;
+      root.replaceChildren();
+      const card = document.createElement("div");
+      card.className = "card";
+
+      if (currentArgs.authenticated) {
+        const identity = document.createElement("span");
+        identity.className = "identity";
+        identity.textContent = currentArgs.email || "Signed in";
+        const button = document.createElement("button");
+        button.textContent = "Sign out";
+        button.onclick = async () => {
+          button.disabled = true;
+          try {
+            await auth.signOut();
+            send({ event: "signed_out", nonce: currentArgs.logoutNonce });
+          } catch (error) {
+            button.disabled = false;
+            showError(error.message);
+          }
+        };
+        card.append(identity, button);
+      } else {
+        const button = document.createElement("button");
+        button.textContent = "Continue with Google";
+        button.onclick = async () => {
+          button.disabled = true;
+          button.textContent = "Connecting to Google...";
+          try {
+            const provider = new firebase.auth.GoogleAuthProvider();
+            provider.setCustomParameters({ prompt: "select_account" });
+            const result = await auth.signInWithPopup(provider);
+            const idToken = await result.user.getIdToken();
+            send({ event: "signed_in", idToken, nonce: currentArgs.logoutNonce });
+          } catch (error) {
+            button.disabled = false;
+            button.textContent = "Continue with Google";
+            showError(error.message);
+          }
+        };
+        card.append(button);
+      }
+      root.append(card);
+    }
+
+    function showError(message) {
+      const old = root.querySelector(".error");
+      if (old) old.remove();
+      const error = document.createElement("div");
+      error.className = "error";
+      error.textContent = message;
+      root.append(error);
+    }
+
+    window.addEventListener("message", async (event) => {
+      const message = event.data;
+      if (
+        event.origin !== streamlitOrigin
+        || !message
+        || message.type !== "streamlit:render"
+      ) return;
+      currentArgs = message.args;
+      if (lastLogoutNonce === null) lastLogoutNonce = currentArgs.logoutNonce;
+
+      if (!auth) {
+        try {
+          if (!firebase.apps.length) {
+            firebase.initializeApp(currentArgs.firebaseConfig);
+          }
+          auth = firebase.auth();
+          auth.onIdTokenChanged(async (user) => {
+            if (user) {
+              const idToken = await user.getIdToken();
+              send({
+                event: currentArgs.authenticated ? "token_refreshed" : "signed_in",
+                idToken,
+                nonce: currentArgs.logoutNonce
+              });
+            }
+          });
+        } catch (error) {
+          showError(error.message);
+        }
+      }
+
+      if (lastLogoutNonce !== currentArgs.logoutNonce) {
+        lastLogoutNonce = currentArgs.logoutNonce;
+        try {
+          await auth.signOut();
+          send({ event: "signed_out", nonce: currentArgs.logoutNonce });
+        } catch (error) {
+          showError(error.message);
+        }
+      }
+      render();
+      window.parent.postMessage({
+        isStreamlitMessage: true,
+        type: "streamlit:setFrameHeight",
+        height: Math.max(root.scrollHeight, 48)
+      }, streamlitOrigin);
+    });
+
+    window.parent.postMessage({
+      isStreamlitMessage: true,
+      type: "streamlit:componentReady",
+      apiVersion: 1
+    }, streamlitOrigin);
+  </script>
+</body>
+</html>
