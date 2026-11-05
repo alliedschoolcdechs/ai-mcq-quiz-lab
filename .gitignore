@@ -6,7 +6,6 @@ firebase_config.json
 
 # Local study materials and user data
 library/*
-!library/.gitkeep
 *.sqlite
 *.db
 
