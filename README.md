@@ -94,7 +94,7 @@ Community Cloud installs the Linux OCR engine using [`packages.txt`](./packages.
 
 ## Import Existing MCQs:
 - Choose **Import existing MCQs** to copy existing questions and their options from a PDF, DOCX, XLSX, CSV, or TXT file. The importer keeps question text, option text, and option order; it does not send these questions through the AI generator.
-- For reliable detection, put each question and each of its four answer choices on separate lines, with choices labeled `A-D` or `1-4`. Scanned PDFs can be OCR-read; enter page ranges to limit OCR to selected pages.
+- For reliable detection, put each question and each of its four answer choices on separate lines, with choices labeled `A-D` or `1-4`. Numbered section headings followed by four labeled lines are not treated as questions. Scanned PDFs can be OCR-read; enter page ranges to limit OCR to selected pages.
 - Choose **Practice** or **Examination**. Practice shows answer feedback when the document includes an answer key; if it does not, the quiz remains ungraded. Examination mode requires answers marked in the document or entered manually before the exam starts.
 - Embedded correct answers are detected from an `Answer Key` section (for example `1-A, 2-C`) or a correct marker such as `*` after an option.
 
@@ -117,6 +117,6 @@ For DOCX, XLSX, and CSV files, the full selected document is analyzed to find to
    ```
 2. Build the `.exe` (the login component must be included):
    ```bash
-   pyinstaller --noconfirm --noconsole --onefile --add-data "app.py;." --add-data "cloud_backend.py;." --add-data "ollama_backend.py;." --add-data "mcq_logic.py;." --add-data "source_facts.py;." --add-data "google_login_component;google_login_component" --collect-all streamlit --collect-all fpdf --collect-all pypdf --collect-all docx run_main.py --name "AI_Quiz_Lab"
+   pyinstaller --noconfirm --noconsole --onefile --add-data "app.py;." --add-data "cloud_backend.py;." --add-data "mcq_import.py;." --add-data "ollama_backend.py;." --add-data "mcq_logic.py;." --add-data "source_facts.py;." --add-data "google_login_component;google_login_component" --collect-all streamlit --collect-all fpdf --collect-all pypdf --collect-all docx run_main.py --name "AI_Quiz_Lab"
    ```
 3. Copy `dist/AI_Quiz_Lab.exe` and the configured `firebase_config.json` to each lab PC. Keep the Firebase project and Firestore rules under school administration.

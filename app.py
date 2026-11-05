@@ -25,6 +25,7 @@ from cloud_backend import (
     load_firebase_config,
     verify_firebase_id_token,
 )
+from mcq_import import parse_imported_mcqs
 from mcq_logic import generate_question_items
 from ollama_backend import OllamaError, find_local_model, generate_json
 from source_facts import definition_fragment, extract_exam_facts
@@ -225,8 +226,25 @@ st.markdown("""
         border-radius: 8px;
         font-weight: 600;
     }
-    [data-testid="stProgress"] > div > div {
-        background-color: #3b82f6;
+    .quiz-progress-label {
+        margin-bottom: 0.4rem;
+        color: #cbd5e1;
+        font-size: 0.9rem;
+        font-weight: 600;
+    }
+    .quiz-progress-track {
+        width: 100%;
+        height: 0.65rem;
+        margin-bottom: 0.9rem;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #253349;
+    }
+    .quiz-progress-fill {
+        height: 100%;
+        border-radius: inherit;
+        background: #3b82f6;
+        transition: width 250ms ease;
     }
     @media (max-width: 760px) {
         [data-testid="stMain"] > div {
@@ -603,165 +621,6 @@ def extract_mcq_lines(
         return [line["text"] for line in source_lines]
 
     raise ValueError("Import existing MCQs supports PDF, DOCX, XLSX, CSV, and TXT files.")
-
-
-MCQ_QUESTION_START = re.compile(
-    r"^\s*(?:(?:question|q)\s*)?(\d{1,4})\s*[.):\-]\s*(\S.*)$",
-    flags=re.IGNORECASE
-)
-MCQ_OPTION_LINE = re.compile(
-    r"^\s*(?:\(([A-D1-4])\)|([A-D1-4])\s*[).:])\s*(.*?)\s*$",
-    flags=re.IGNORECASE
-)
-MCQ_ANSWER_HEADER = re.compile(
-    r"^\s*(?:answer\s*key|answers?|correct\s+answers?)\s*[:\-]?\s*(.*)$",
-    flags=re.IGNORECASE
-)
-MCQ_ANSWER_ENTRY = re.compile(
-    r"(?:\bQ(?:uestion)?\s*)?(\d{1,4})\s*[-:.)]?\s*([A-D1-4])\b",
-    flags=re.IGNORECASE
-)
-
-
-def parse_imported_mcqs(lines):
-    parsed_questions = []
-    answer_key = {}
-    question_text = []
-    options = []
-    option_labels = []
-    marked_answer = None
-    current_question_number = None
-    answer_key_mode = False
-
-    def finish_question():
-        nonlocal question_text, options, option_labels, marked_answer
-        nonlocal current_question_number
-        stem = re.sub(r"\s+", " ", " ".join(question_text)).strip()
-        if stem and len(options) == 4 and len(set(option_labels)) == 4:
-            question_number = len(parsed_questions) + 1
-            correct_index = marked_answer
-            if correct_index is None:
-                answer_label = answer_key.get(
-                    current_question_number or question_number
-                )
-                if answer_label is not None:
-                    correct_index = answer_label
-            answer = options[correct_index] if correct_index in range(4) else None
-            parsed_questions.append({
-                "id": question_number,
-                "question": stem,
-                "options": options[:],
-                "answer": answer,
-                "source_text": "",
-                "topic": "Imported question",
-                "option_explanations": {},
-                "page": None,
-                "unit": None,
-                "unit_group": None,
-                "source_location": None,
-                "_source_number": current_question_number or question_number
-            })
-        question_text = []
-        options = []
-        option_labels = []
-        marked_answer = None
-        current_question_number = None
-
-    def add_answer_entries(text):
-        for entry in MCQ_ANSWER_ENTRY.finditer(text):
-            question_number = int(entry.group(1))
-            answer_token = entry.group(2).upper()
-            answer_key[question_number] = (
-                ord(answer_token) - ord("A")
-                if answer_token in "ABCD"
-                else int(answer_token) - 1
-            )
-
-    for raw_line in lines:
-        line = re.sub(r"\s+", " ", str(raw_line)).strip()
-        if not line:
-            continue
-
-        answer_header = MCQ_ANSWER_HEADER.match(line)
-        if answer_header:
-            finish_question()
-            answer_key_mode = True
-            line = answer_header.group(1).strip()
-            if not line:
-                continue
-
-        answer_entries = list(MCQ_ANSWER_ENTRY.finditer(line))
-        if answer_key_mode and answer_entries:
-            add_answer_entries(line)
-            continue
-
-        question_match = MCQ_QUESTION_START.match(line)
-        option_match = MCQ_OPTION_LINE.match(line)
-        numeric_option_is_expected = False
-        if option_match:
-            numeric_label = (option_match.group(1) or option_match.group(2)).upper()
-            if numeric_label in "1234" and question_text:
-                numeric_option_is_expected = (
-                    (not option_labels and numeric_label == "1")
-                    or (
-                        option_labels
-                        and option_labels[0] in "1234"
-                        and int(numeric_label) == len(options) + 1
-                    )
-                )
-        if question_match and not numeric_option_is_expected:
-            if options or question_text:
-                finish_question()
-            current_question_number = int(question_match.group(1))
-            question_text.append(question_match.group(2))
-            continue
-
-        if option_match:
-            label = (option_match.group(1) or option_match.group(2)).upper()
-            label_index = (
-                ord(label) - ord("A") if label in "ABCD" else int(label) - 1
-            )
-            if options and (len(options) == 4 or label in option_labels):
-                finish_question()
-            option_text = option_match.group(3).strip()
-            has_correct_mark = bool(
-                re.search(r"(?:\*|✓|✔|\[correct\]|\(correct\))\s*$", option_text, re.I)
-                or re.match(r"^(?:✓|✔|\*|\[correct\]|\(correct\))\s*", option_text, re.I)
-            )
-            option_text = re.sub(
-                r"^(?:✓|✔|\*|\[correct\]|\(correct\))\s*|\s*(?:\*|✓|✔|\[correct\]|\(correct\))$",
-                "",
-                option_text,
-                flags=re.IGNORECASE
-            ).strip()
-            if option_text:
-                if has_correct_mark:
-                    marked_answer = label_index
-                options.append(option_text)
-                option_labels.append(label)
-            continue
-
-        if answer_key_mode:
-            if answer_entries:
-                add_answer_entries(line)
-            continue
-
-        if len(options) == 4:
-            finish_question()
-        if options:
-            options[-1] = f"{options[-1]} {line}".strip()
-        else:
-            question_text.append(line)
-
-    finish_question()
-    for question in parsed_questions:
-        if question["answer"] is not None:
-            question.pop("_source_number", None)
-            continue
-        answer_index = answer_key.get(question.pop("_source_number"))
-        if answer_index in range(4):
-            question["answer"] = question["options"][answer_index]
-    return parsed_questions
 
 
 def start_quiz(questions, student_name, file_name, quiz_mode, question_source):
@@ -1884,7 +1743,7 @@ if st.session_state.app_state == "upload":
                 )
                 st.caption(
                     "Question wording and choices are copied from the document; "
-                    "the app does not rewrite imported questions."
+                    "numbered section headings are ignored instead of treated as questions."
                 )
             else:
                 num_q = st.slider(
@@ -2094,8 +1953,9 @@ if st.session_state.app_state == "upload":
                     questions = parse_imported_mcqs(source_lines)
                     if not questions:
                         raise ValueError(
-                            "No MCQs with one question and four labeled choices were detected. "
-                            "Use choices labeled A-D or 1-4, with each choice on its own line."
+                            "No usable MCQs were detected. Numbered section headings and "
+                            "unstructured lists are ignored. Use a clear question followed "
+                            "by four choices labeled A-D or 1-4, each on its own line."
                         )
                     for question in questions:
                         question["source_location"] = selected_file_name
@@ -2251,7 +2111,17 @@ elif st.session_state.app_state == "quiz":
         if st.session_state.generation_notice:
             st.info(st.session_state.generation_notice)
 
-        st.progress((idx + 1) / len(questions), text=f"Question {idx + 1} of {len(questions)}")
+        progress_percent = int(100 * (idx + 1) / len(questions))
+        st.markdown(
+            f"""
+            <div class="quiz-progress-label">Question {idx + 1} of {len(questions)}</div>
+            <div class="quiz-progress-track" role="progressbar"
+                 aria-valuenow="{progress_percent}" aria-valuemin="0" aria-valuemax="100">
+                <div class="quiz-progress-fill" style="width: {progress_percent}%"></div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
         st.markdown(f"""
         <div class="fade-in-card">

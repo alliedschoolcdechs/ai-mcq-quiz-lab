@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('app.py', '.'), ('cloud_backend.py', '.'), ('ollama_backend.py', '.'), ('mcq_logic.py', '.'), ('source_facts.py', '.'), ('google_login_component', 'google_login_component')]
+datas = [('app.py', '.'), ('cloud_backend.py', '.'), ('mcq_import.py', '.'), ('ollama_backend.py', '.'), ('mcq_logic.py', '.'), ('source_facts.py', '.'), ('google_login_component', 'google_login_component')]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('streamlit')
