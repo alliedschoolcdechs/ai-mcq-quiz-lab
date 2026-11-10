@@ -407,7 +407,8 @@ def read_document_text(
     file_name,
     selected_pages=None,
     progress_callback=None,
-    progress_start=58
+    progress_start=5,
+    progress_end=55
 ):
     source_lines = []
     file_extension = file_name.split(".")[-1].lower()
@@ -502,7 +503,9 @@ def read_document_text(
                     add_text_lines(t, page=page_number, merge_wrapped=True)
                 if progress_callback:
                     progress = progress_start + int(
-                        (65 - progress_start) * (page_index + 1) / max(1, total_to_read)
+                        (progress_end - progress_start)
+                        * (page_index + 1)
+                        / max(1, total_to_read)
                     )
                     progress_callback(
                         progress,
@@ -554,13 +557,15 @@ def extract_uploaded_text(
     file_bytes,
     file_name,
     selected_pages=None,
-    _progress_callback=None
+    _progress_callback=None,
+    progress_start=5
 ):
     return read_document_text(
         file_bytes,
         file_name,
         selected_pages,
-        _progress_callback
+        _progress_callback,
+        progress_start
     )
 
 
@@ -569,7 +574,8 @@ def extract_library_text(
     modified_ns,
     file_size,
     selected_pages=None,
-    _progress_callback=None
+    _progress_callback=None,
+    progress_start=5
 ):
     library_path = LIBRARY_DIR / Path(file_name).name
     current_stat = library_path.stat()
@@ -579,7 +585,8 @@ def extract_library_text(
         library_path.read_bytes(),
         library_path.name,
         selected_pages,
-        _progress_callback
+        _progress_callback,
+        progress_start
     )
 
 
@@ -674,7 +681,7 @@ def extract_mcq_lines(
                 )
             lines.extend(page_text.splitlines())
             if progress_callback:
-                progress = 58 + int(12 * (page_index + 1) / max(1, len(pages_to_read)))
+                progress = 5 + int(50 * (page_index + 1) / max(1, len(pages_to_read)))
                 progress_page_limit = (
                     pages_to_read[-1] if selected_pages is not None else page_count
                 )
@@ -699,12 +706,12 @@ def extract_mcq_lines(
                 for cell in row.cells:
                     lines.extend(cell.text.splitlines())
         if progress_callback:
-            progress_callback(70, "Read question text from the Word document.")
+            progress_callback(55, "Read question text from the Word document.")
         return lines
 
     if extension == ".txt":
         if progress_callback:
-            progress_callback(70, "Read question text from the text document.")
+            progress_callback(55, "Read question text from the text document.")
         return file_bytes.decode("utf-8-sig", errors="replace").splitlines()
 
     if extension in {".csv", ".xlsx"}:
@@ -712,7 +719,7 @@ def extract_mcq_lines(
             file_bytes,
             file_name,
             progress_callback=progress_callback,
-            progress_start=58
+            progress_start=5
         )
         return [line["text"] for line in source_lines]
 
@@ -794,7 +801,7 @@ def locate_pdf_pages(file_bytes, query, instruction_search=False, _progress_call
         if matched:
             matched_pages.append(page_number)
         if _progress_callback:
-            progress = 8 + int(47 * page_number / max(1, page_count))
+            progress = 5 + int(25 * page_number / max(1, page_count))
             _progress_callback(
                 progress,
                 f"Searching selectable text on page {page_number} of {page_count}"
@@ -1087,7 +1094,7 @@ def generate_mcqs_from_source(
         record for record, fact in unique_facts
         if id(fact) in candidate_fact_objects
     ]
-    report_progress(85, "Generating grounded questions with OmniRoute AI.")
+    report_progress(80, "Generating grounded questions with OmniRoute AI.")
     generated_questions = generate_omniroute_question_items(
         source_facts,
         num_questions,
@@ -1242,7 +1249,7 @@ def generate_mcqs(
         if progress_callback:
             progress_callback(value, message)
 
-    report_progress(68, "Finding conceptual facts in the selected material")
+    report_progress(60, "Finding conceptual facts in the selected material")
     if isinstance(text, str):
         source_lines = [
             {"text": line, "page": None, "unit": None}
@@ -1251,7 +1258,7 @@ def generate_mcqs(
     else:
         source_lines = text
     facts = extract_exam_facts(source_lines)
-    report_progress(76, f"Identified {len(facts)} clean conceptual facts")
+    report_progress(68, f"Identified {len(facts)} clean conceptual facts")
     if not facts:
         report_progress(100, "No clear source-backed concepts were found in the selected material")
         return []
@@ -1291,7 +1298,7 @@ def generate_mcqs(
         candidates = fact_pool[:]
 
     report_progress(
-        82,
+        74,
         f"Matched {len(candidates)} facts to the requested topic/unit"
         if topic_terms
         else f"Preparing {len(candidates)} facts from the selected material"
@@ -2252,11 +2259,12 @@ if st.session_state.app_state == "upload":
                 status_slot.info(message)
 
             try:
+                extraction_progress_start = 5
                 selected_pages = None
                 if page_ranges.strip():
                     if Path(selected_file_name).suffix.lower() != ".pdf":
                         raise ValueError("Page ranges can only be used with PDF files.")
-                    update_generation_progress(5, "Validating the requested PDF page ranges.")
+                    update_generation_progress(2, "Validating the requested PDF page ranges.")
                     selected_pages = parse_page_selection(page_ranges)
 
                 if question_source == "Import existing MCQs":
@@ -2285,6 +2293,7 @@ if st.session_state.app_state == "upload":
                             "unstructured lists are ignored. Use a clear question followed "
                             "by four choices labeled A-D or 1-4, each on its own line."
                         )
+                    update_generation_progress(80, "Checking imported question formatting.")
                     for question in questions:
                         question["source_location"] = selected_file_name
                     if quiz_mode == "Examination":
@@ -2305,8 +2314,9 @@ if st.session_state.app_state == "upload":
                         and search_query
                         and search_terms(search_query)
                     ):
+                        extraction_progress_start = 30
                         update_generation_progress(
-                            8,
+                            5,
                             "Searching selectable PDF text for matching pages."
                         )
                         if selected_file_path and library_stat:
@@ -2327,7 +2337,7 @@ if st.session_state.app_state == "upload":
                             )
                         if not matched_pages:
                             update_generation_progress(
-                                55,
+                                30,
                                 "No matching selectable text found; reading the full PDF. "
                                 "OCR may process every scanned page."
                             )
@@ -2341,7 +2351,7 @@ if st.session_state.app_state == "upload":
                                 )
                             }))
                             update_generation_progress(
-                                58,
+                                30,
                                 f"Found {len(matched_pages)} matching pages; adding nearby context for answer choices."
                             )
 
@@ -2367,13 +2377,13 @@ if st.session_state.app_state == "upload":
                             cached_entry.get("facts")
                         )
                         update_generation_progress(
-                            68,
+                            55,
                             f"Loaded {len(source_lines)} cached source facts for "
                             f"{selected_file_name}."
                         )
                     else:
                         update_generation_progress(
-                            58,
+                            extraction_progress_start,
                             (
                                 "Reading the full selected document."
                                 if selected_pages is None
@@ -2386,14 +2396,16 @@ if st.session_state.app_state == "upload":
                                 library_stat.st_mtime_ns,
                                 library_stat.st_size,
                                 selected_pages,
-                                _progress_callback=update_generation_progress
+                                _progress_callback=update_generation_progress,
+                                progress_start=extraction_progress_start
                             )
                         else:
                             source_lines = extract_uploaded_text(
                                 selected_file_bytes,
                                 selected_file_name,
                                 selected_pages,
-                                _progress_callback=update_generation_progress
+                                _progress_callback=update_generation_progress,
+                                progress_start=extraction_progress_start
                             )
                         if selected_file_path and library_stat and selected_pages is None:
                             try:
@@ -2405,7 +2417,7 @@ if st.session_state.app_state == "upload":
                                     source_lines,
                                 )
                                 update_generation_progress(
-                                    70,
+                                    58,
                                     "Saved extracted topics and units for faster future quizzes."
                                 )
                             except CloudBackendError as error:
@@ -2415,7 +2427,7 @@ if st.session_state.app_state == "upload":
                                 )
 
                     update_generation_progress(
-                        72,
+                        60,
                         "Building questions from the selected source content."
                     )
                     questions = generate_mcqs(
