@@ -56,14 +56,13 @@ the gateway and key in Streamlit Secrets instead; do not ask students to enter
 a shared service key. The key from OmniRoute's **API Keys** page authenticates
 calls to OmniRoute; provider keys configured inside OmniRoute are separate.
 
-Library documents use two cache layers. Parsed library text is cached locally
-for 24 hours using the file name, size, and modification time. After a full
-library read, the extracted topics, units, page references, and source
-statements are also stored in the signed-in user's Firebase profile. An
-unchanged library file can therefore reuse its cached facts on another quiz or
-app restart. Changing the file size or modification time invalidates that
-profile cache automatically. Page-limited reads still extract only the
-requested PDF pages.
+Library documents use two cache layers. OCR results for individual PDF pages
+are cached locally for 24 hours. After a full library read, the extracted
+topics, units, page references, and source statements are also stored in the
+signed-in user's Firebase profile. An unchanged library file can therefore
+reuse its cached facts on another quiz or app restart. Changing the file size
+or modification time invalidates that profile cache automatically.
+Page-limited reads still extract only the requested PDF pages.
 
 Without a valid `firebase_config.json`, the app stays on the setup/sign-in screen and does not expose the quiz.
 

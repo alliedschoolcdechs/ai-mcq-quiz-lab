@@ -562,7 +562,6 @@ def extract_uploaded_text(
     )
 
 
-@st.cache_data(show_spinner=False, ttl=86400, max_entries=128)
 def extract_library_text(
     file_name,
     modified_ns,
