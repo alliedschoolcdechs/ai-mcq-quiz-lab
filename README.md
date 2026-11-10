@@ -51,10 +51,13 @@ student information or copyrighted material to a third-party provider unless
 your school has approved that provider.
 
 For local use, the same values can be entered after sign-in in the
-**OmniRoute AI settings** section in the app sidebar. For a hosted app, configure
-the gateway and key in Streamlit Secrets instead; do not ask students to enter
-a shared service key. The key from OmniRoute's **API Keys** page authenticates
-calls to OmniRoute; provider keys configured inside OmniRoute are separate.
+**OmniRoute AI settings** section in the app sidebar. In a hosted deployment
+with Firebase configured in Streamlit Secrets, students do not see these
+settings: the app uses the administrator's server-side OmniRoute configuration
+for generation requests. Configure the gateway and key in Streamlit Secrets;
+do not ask students to enter a shared service key. The key from OmniRoute's
+**API Keys** page authenticates calls to OmniRoute; provider keys configured
+inside OmniRoute are separate.
 
 Library documents use two cache layers. OCR results for individual PDF pages
 are cached locally for 24 hours. After a full library read, the extracted

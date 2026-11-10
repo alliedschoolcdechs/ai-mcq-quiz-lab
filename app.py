@@ -43,15 +43,17 @@ LIBRARY_DIR.mkdir(exist_ok=True)
 SUPPORTED_FILE_TYPES = {".pdf", ".docx", ".xlsx", ".csv", ".txt"}
 
 
-def load_omniroute_secret_settings():
+def load_streamlit_secret_section(section_name):
     try:
-        settings = st.secrets.get("omniroute", {})
+        settings = st.secrets.get(section_name, {})
     except StreamlitSecretNotFoundError:
         return {}
     return settings if isinstance(settings, Mapping) else {}
 
 
-OMNIROUTE_SECRET_SETTINGS = load_omniroute_secret_settings()
+FIREBASE_SECRET_SETTINGS = load_streamlit_secret_section("firebase")
+OMNIROUTE_SECRET_SETTINGS = load_streamlit_secret_section("omniroute")
+HOSTED_DEPLOYMENT = bool(FIREBASE_SECRET_SETTINGS)
 
 # Page Config
 st.set_page_config(
@@ -844,27 +846,31 @@ def _omniroute_chat(messages, temperature=0.2):
     secret_endpoint = OMNIROUTE_SECRET_SETTINGS.get("endpoint")
     secret_api_key = OMNIROUTE_SECRET_SETTINGS.get("api_key")
     secret_model = OMNIROUTE_SECRET_SETTINGS.get("model")
-    endpoint = str(
-        secret_endpoint
-        or st.session_state.get(
+    if HOSTED_DEPLOYMENT and not secret_endpoint:
+        raise RuntimeError(
+            "AI generation is not configured by the app administrator. "
+            "Add the OmniRoute endpoint to the app's Streamlit Secrets."
+        )
+    if HOSTED_DEPLOYMENT:
+        endpoint_value = secret_endpoint
+        api_key_value = secret_api_key or ""
+        model_value = secret_model or "auto"
+    else:
+        endpoint_value = secret_endpoint or st.session_state.get(
             "omniroute_endpoint",
             os.environ.get("OMNIROUTE_ENDPOINT", "http://localhost:20128/v1"),
         )
-    ).strip().rstrip("/")
-    api_key = str(
-        secret_api_key
-        or st.session_state.get(
+        api_key_value = secret_api_key or st.session_state.get(
             "omniroute_api_key",
             os.environ.get("OMNIROUTE_API_KEY", ""),
         )
-    ).strip()
-    model = str(
-        secret_model
-        or st.session_state.get(
+        model_value = secret_model or st.session_state.get(
             "omniroute_model",
             os.environ.get("OMNIROUTE_MODEL", "auto"),
         )
-    ).strip()
+    endpoint = str(endpoint_value).strip().rstrip("/")
+    api_key = str(api_key_value).strip()
+    model = str(model_value).strip()
     headers = {"Content-Type": "application/json"}
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -1762,30 +1768,17 @@ with st.sidebar:
         f"**Signed in:** "
         f"{format_display_name(st.session_state.cloud_user.get('displayName'))}"
     )
-    with st.expander("OmniRoute AI settings", expanded=True):
-        if OMNIROUTE_SECRET_SETTINGS.get("api_key"):
-            st.caption(
-                "AI access is configured securely by the app administrator."
-            )
-            st.text_input(
-                "OmniRoute endpoint",
-                value=str(
-                    OMNIROUTE_SECRET_SETTINGS.get(
-                        "endpoint",
-                        "Configured by administrator",
-                    )
-                ),
-                disabled=True,
-            )
-            st.text_input(
-                "OmniRoute model",
-                value=str(OMNIROUTE_SECRET_SETTINGS.get("model", "auto")),
-                disabled=True,
-            )
-        else:
+    if HOSTED_DEPLOYMENT:
+        st.caption("AI generation is managed by the app administrator.")
+    else:
+        with st.expander("OmniRoute AI settings", expanded=True):
             st.caption(
                 "These settings apply only to this browser session. The API key "
                 "is not saved to Firebase or project files."
+            )
+            st.caption(
+                "For a hosted deployment, the app administrator configures the "
+                "gateway in Streamlit Secrets."
             )
             st.text_input(
                 "OmniRoute endpoint",
@@ -1806,16 +1799,16 @@ with st.sidebar:
                 key="omniroute_model",
                 help="Use auto for OmniRoute routing, or enter a specific model ID.",
             )
-        if st.button("Test OmniRoute connection", use_container_width=True):
-            try:
-                test_result = _omniroute_chat(
-                    [{"role": "user", "content": "Reply with OK only."}],
-                    temperature=0,
-                )
-                st.success("OmniRoute connection succeeded.")
-                st.caption(f"Response received: {json.dumps(test_result)[:180]}")
-            except (requests.RequestException, RuntimeError, ValueError) as error:
-                st.error(f"OmniRoute connection failed: {error}")
+            if st.button("Test OmniRoute connection", use_container_width=True):
+                try:
+                    test_result = _omniroute_chat(
+                        [{"role": "user", "content": "Reply with OK only."}],
+                        temperature=0,
+                    )
+                    st.success("OmniRoute connection succeeded.")
+                    st.caption(f"Response received: {json.dumps(test_result)[:180]}")
+                except (requests.RequestException, RuntimeError, ValueError) as error:
+                    st.error(f"OmniRoute connection failed: {error}")
     if st.button("Refresh access", use_container_width=True):
         try:
             st.session_state.is_admin = cloud_client.is_admin(
