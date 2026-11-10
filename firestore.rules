@@ -20,7 +20,7 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
           'uid', 'email', 'displayName', 'photoUrl', 'createdAt',
           'lastLoginAt', 'lastAttemptAt', 'lastAttemptId',
-          'lastScorePct', 'lastAttemptGraded'
+          'lastScorePct', 'lastAttemptGraded', 'documentCache'
         ]);
       allow update: if signedIn()
         && request.auth.uid == uid
@@ -30,11 +30,11 @@ service cloud.firestore {
         && request.resource.data.keys().hasOnly([
           'uid', 'email', 'displayName', 'photoUrl', 'createdAt',
           'lastLoginAt', 'lastAttemptAt', 'lastAttemptId',
-          'lastScorePct', 'lastAttemptGraded'
+          'lastScorePct', 'lastAttemptGraded', 'documentCache'
         ])
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'displayName', 'photoUrl', 'lastLoginAt', 'lastAttemptAt',
-          'lastAttemptId', 'lastScorePct', 'lastAttemptGraded'
+          'lastAttemptId', 'lastScorePct', 'lastAttemptGraded', 'documentCache'
         ]);
       allow delete: if false;
     }

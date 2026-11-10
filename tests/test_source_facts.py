@@ -102,7 +102,7 @@ class SourceFactExtractionTests(unittest.TestCase):
 
         self.assertEqual(facts, [])
 
-    def test_extracted_text_can_generate_a_complete_quiz_without_ollama(self):
+    def test_extracted_text_can_generate_a_complete_quiz(self):
         source_lines = [
             {"text": (
                 "RAM is temporary volatile memory that stores data and programs "

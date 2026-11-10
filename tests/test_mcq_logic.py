@@ -96,6 +96,29 @@ class SourceGroundedQuestionTests(unittest.TestCase):
         self.assertIn("used to store", ram["question"])
         self.assertEqual(ram["question_type"], "function")
 
+    def test_guidance_changes_questions_to_application_style(self):
+        questions = generate_question_items(
+            self.records,
+            1,
+            question_guidance="Use real-world scenarios and application questions.",
+            rng=random.Random(4),
+        )
+
+        self.assertEqual(questions[0]["question_type"], "application")
+        self.assertIn("student needs", questions[0]["question"])
+        self.assertIn("Which concept", questions[0]["question"])
+
+    def test_guidance_changes_questions_to_comparison_style(self):
+        questions = generate_question_items(
+            self.records,
+            1,
+            question_guidance="Compare and contrast the memory concepts.",
+            rng=random.Random(4),
+        )
+
+        self.assertEqual(questions[0]["question_type"], "comparison")
+        self.assertIn("distinguishing", questions[0]["question"])
+
     def test_memory_question_uses_same_topic_as_its_distractors(self):
         questions = generate_question_items(
             self.records,

@@ -86,8 +86,35 @@ def _cosine_similarity(left, right, inverse_frequency):
     return dot_product / (left_norm * right_norm)
 
 
-def _question_for(record, index):
+def _guidance_style(guidance):
+    guidance = str(guidance or "").casefold()
+    if re.search(r"\b(compare|comparison|contrast|difference|distinguish)\b", guidance):
+        return "comparison"
+    if re.search(r"\b(application|scenario|situation|case study|real[- ]world)\b", guidance):
+        return "application"
+    if re.search(r"\b(purpose|function|role|use|used|responsib|how does)\b", guidance):
+        return "function"
+    return "identification"
+
+
+def _question_for(record, index, guidance=""):
     definition = re.sub(r"\s+", " ", record["definition"]).strip().rstrip(".!?")
+    style = _guidance_style(guidance)
+    if style == "comparison":
+        return (
+            "Which concept is the best match when distinguishing the following "
+            f"characteristic from related concepts: {definition}?"
+        )
+    if style == "application":
+        return (
+            "A student needs a concept that can provide this capability: "
+            f"{definition}. Which concept should the student choose?"
+        )
+    if style == "function":
+        return (
+            "A computer system needs to satisfy this requirement: "
+            f"{definition}. Which concept provides it?"
+        )
     for pattern, fixed_verb in _ACTION_PATTERNS:
         match = pattern.search(definition)
         if not match:
@@ -97,12 +124,8 @@ def _question_for(record, index):
         else:
             verb, rest = match.groups()
             action = f"{verb.casefold()} {rest.rstrip('.!?')}"
-        if index % 3 == 2:
-            return f"The source describes a concept that {action}. Which one is it?"
-        prefix = "Which concept" if index % 3 == 0 else "Which concept in the material"
-        return f"{prefix} {action}?"
-    template = _QUESTION_TEMPLATES[index % len(_QUESTION_TEMPLATES)]
-    return template.format(definition=definition)
+        return f"Which concept is associated with this capability: {action}?"
+    return f"Which concept should a student select for this requirement: {definition}?"
 
 
 def generate_question_items(
@@ -110,6 +133,7 @@ def generate_question_items(
     num_questions,
     distractor_records=None,
     rng=None,
+    question_guidance="",
 ):
     """Build source-grounded questions with related, document-derived distractors."""
     rng = rng or random
@@ -226,10 +250,30 @@ def generate_question_items(
         )
         questions.append({
             "source_fact_id": target["id"],
-            "question": _question_for(target, len(questions)),
-            "question_type": question_type,
+            "question": _question_for(
+                target,
+                len(questions),
+                guidance=question_guidance,
+            ),
+            "question_type": (
+                "comparison"
+                if _guidance_style(question_guidance) == "comparison"
+                else (
+                    "application"
+                    if _guidance_style(question_guidance) == "application"
+                    else question_type
+                )
+            ),
             "options": options,
             "answer": target["concept"],
+            "concept_tested": target["concept"],
+            "correct_answer_index": options.index(target["concept"]),
+            "explanation": (
+                f"{target['concept']} is correct because the source states that "
+                f"{target['definition'].rstrip('.!?')}. The other choices describe "
+                "different source-backed concepts and therefore do not match this "
+                "question."
+            ),
         })
         for distractor in distractors:
             key = distractor["concept"].casefold()
