@@ -9,6 +9,7 @@ import re
 import shutil
 import sys
 import uuid
+from collections.abc import Mapping
 from datetime import datetime, timezone
 from pathlib import Path
 import pandas as pd
@@ -40,6 +41,18 @@ APP_DIR = (
 LIBRARY_DIR = APP_DIR / "library"
 LIBRARY_DIR.mkdir(exist_ok=True)
 SUPPORTED_FILE_TYPES = {".pdf", ".docx", ".xlsx", ".csv", ".txt"}
+
+
+def load_omniroute_secret_settings():
+    try:
+        settings = st.secrets.get("omniroute", {})
+    except StreamlitSecretNotFoundError:
+        return {}
+    return settings if isinstance(settings, Mapping) else {}
+
+
+OMNIROUTE_SECRET_SETTINGS = load_omniroute_secret_settings()
+
 # Page Config
 st.set_page_config(
     page_title="AI MCQ Generator & Quiz Lab",
@@ -303,7 +316,10 @@ if "document_cache" not in st.session_state:
 if "omniroute_endpoint" not in st.session_state:
     st.session_state.omniroute_endpoint = os.environ.get(
         "OMNIROUTE_ENDPOINT",
-        "http://localhost:20128/v1",
+        OMNIROUTE_SECRET_SETTINGS.get(
+            "endpoint",
+            "http://localhost:20128/v1",
+        ),
     )
 if "omniroute_api_key" not in st.session_state:
     st.session_state.omniroute_api_key = os.environ.get(
@@ -313,7 +329,7 @@ if "omniroute_api_key" not in st.session_state:
 if "omniroute_model" not in st.session_state:
     st.session_state.omniroute_model = os.environ.get(
         "OMNIROUTE_MODEL",
-        "auto",
+        OMNIROUTE_SECRET_SETTINGS.get("model", "auto"),
     )
 
 # ==========================================
@@ -826,20 +842,26 @@ QUESTION_STOP_WORDS = {
 
 
 def _omniroute_chat(messages, temperature=0.2):
+    secret_endpoint = OMNIROUTE_SECRET_SETTINGS.get("endpoint")
+    secret_api_key = OMNIROUTE_SECRET_SETTINGS.get("api_key")
+    secret_model = OMNIROUTE_SECRET_SETTINGS.get("model")
     endpoint = str(
-        st.session_state.get(
+        secret_endpoint
+        or st.session_state.get(
             "omniroute_endpoint",
             os.environ.get("OMNIROUTE_ENDPOINT", "http://localhost:20128/v1"),
         )
     ).strip().rstrip("/")
     api_key = str(
-        st.session_state.get(
+        secret_api_key
+        or st.session_state.get(
             "omniroute_api_key",
             os.environ.get("OMNIROUTE_API_KEY", ""),
         )
     ).strip()
     model = str(
-        st.session_state.get(
+        secret_model
+        or st.session_state.get(
             "omniroute_model",
             os.environ.get("OMNIROUTE_MODEL", "auto"),
         )
@@ -1698,29 +1720,49 @@ with st.sidebar:
         f"{format_display_name(st.session_state.cloud_user.get('displayName'))}"
     )
     with st.expander("OmniRoute AI settings", expanded=True):
-        st.caption(
-            "These settings apply only to this browser session. The API key is "
-            "not saved to Firebase or the project files."
-        )
-        st.text_input(
-            "OmniRoute endpoint",
-            key="omniroute_endpoint",
-            help="OpenAI-compatible base URL, normally http://localhost:20128/v1.",
-        )
-        st.text_input(
-            "OmniRoute API key",
-            type="password",
-            key="omniroute_api_key",
-            help=(
-                "Use the key from OmniRoute Dashboard > Endpoints. This is "
-                "different from a provider key."
-            ),
-        )
-        st.text_input(
-            "OmniRoute model",
-            key="omniroute_model",
-            help="Use auto for OmniRoute routing, or enter a specific model ID.",
-        )
+        if OMNIROUTE_SECRET_SETTINGS.get("api_key"):
+            st.caption(
+                "AI access is configured securely by the app administrator."
+            )
+            st.text_input(
+                "OmniRoute endpoint",
+                value=str(
+                    OMNIROUTE_SECRET_SETTINGS.get(
+                        "endpoint",
+                        "Configured by administrator",
+                    )
+                ),
+                disabled=True,
+            )
+            st.text_input(
+                "OmniRoute model",
+                value=str(OMNIROUTE_SECRET_SETTINGS.get("model", "auto")),
+                disabled=True,
+            )
+        else:
+            st.caption(
+                "These settings apply only to this browser session. The API key "
+                "is not saved to Firebase or project files."
+            )
+            st.text_input(
+                "OmniRoute endpoint",
+                key="omniroute_endpoint",
+                help="OpenAI-compatible base URL, normally http://localhost:20128/v1.",
+            )
+            st.text_input(
+                "OmniRoute API key",
+                type="password",
+                key="omniroute_api_key",
+                help=(
+                    "Use the key from OmniRoute Dashboard > API Keys. This is "
+                    "different from a provider key."
+                ),
+            )
+            st.text_input(
+                "OmniRoute model",
+                key="omniroute_model",
+                help="Use auto for OmniRoute routing, or enter a specific model ID.",
+            )
         if st.button("Test OmniRoute connection", use_container_width=True):
             try:
                 test_result = _omniroute_chat(

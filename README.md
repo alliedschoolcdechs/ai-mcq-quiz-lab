@@ -30,9 +30,9 @@ validated against its extracted source fact before it is added to a quiz.
 
 ### OmniRoute AI question generation
 
-The app can use a local OmniRoute OpenAI-compatible gateway to improve question
-wording, distractor selection, and incorrect-answer explanations. Configure
-OmniRoute before launching the app:
+The app uses an OmniRoute OpenAI-compatible gateway to improve question
+wording, distractor selection, and incorrect-answer explanations. For local
+use, configure OmniRoute before launching the app:
 
 ```powershell
 $env:OMNIROUTE_ENDPOINT = "http://localhost:20128/v1"
@@ -50,10 +50,11 @@ can have changing quotas, latency, or quality; do not send confidential
 student information or copyrighted material to a third-party provider unless
 your school has approved that provider.
 
-The same values can be entered after sign-in in the **OmniRoute AI settings**
-section in the app sidebar. The endpoint key is kept only in the current
-Streamlit session. The key in **Dashboard -> Endpoints** authenticates calls to
-OmniRoute; provider keys configured inside OmniRoute are separate.
+For local use, the same values can be entered after sign-in in the
+**OmniRoute AI settings** section in the app sidebar. For a hosted app, configure
+the gateway and key in Streamlit Secrets instead; do not ask students to enter
+a shared service key. The key from OmniRoute's **API Keys** page authenticates
+calls to OmniRoute; provider keys configured inside OmniRoute are separate.
 
 Library documents use two cache layers. Parsed library text is cached locally
 for 24 hours using the file name, size, and modification time. After a full
@@ -102,26 +103,34 @@ If you expose the Streamlit server to other devices over a network instead of ha
 
 The EXE runs a local Streamlit server on the computer where it is launched; it is not itself a mobile app or a hosted website. For phone access, deploy the app on a secured, HTTPS school server.
 
-### Mobile web app on Streamlit Community Cloud
+### Deploying on Streamlit Community Cloud
 
-The mobile web version runs on Streamlit's host; students open its HTTPS `streamlit.app` URL in their phone browser. It uses the same built-in source-based question logic and does not require a model download or external AI service.
+Students open the deployed HTTPS `streamlit.app` URL in a browser. The app
+processes uploaded documents on the Streamlit host, and sends extracted source
+facts to the configured AI gateway for question generation and explanations.
 
 To deploy:
 
-1. Put the app source and `requirements.txt` in a GitHub repository that you can deploy from Streamlit Community Cloud. Do not upload `firebase_config.json`, credentials, student data, or PDF/library files to a public repository.
-2. In Streamlit Community Cloud, create an app from that repository and select `app.py` as the entry point. Python 3.12 is the Community Cloud default and is the recommended deployment version for this app.
-3. In the app's **Settings → Secrets**, add the Firebase web-app configuration in TOML form:
+1. Use a GitHub repository connected to your Streamlit Community Cloud account. Do not commit `firebase_config.json`, API keys, student data, or PDF/library files.
+2. In Streamlit Community Cloud, create an app from the repository's `main` branch and select `app.py` as the entry point.
+3. In the app's **Settings → Secrets**, add the Firebase web-app configuration and the OmniRoute gateway configuration in TOML form:
    ```toml
    [firebase]
    apiKey = "YOUR_FIREBASE_WEB_API_KEY"
    authDomain = "YOUR_FIREBASE_PROJECT_ID.firebaseapp.com"
    projectId = "YOUR_FIREBASE_PROJECT_ID"
    appId = "YOUR_FIREBASE_WEB_APP_ID"
-   ```
-   These settings are the Firebase web client configuration, not a service-account key. Never add a Firebase service-account/private key.
-4. Add the deployed `your-app-name.streamlit.app` hostname to Firebase Authentication's **Authorized domains**, then sign in and test a quiz from a phone.
 
-Community Cloud installs the Linux OCR engine using [`packages.txt`](./packages.txt). Uploaded documents are processed by the Streamlit host. Question generation does not send source text to an AI API; documents still leave the user's phone and are processed by the hosting provider. Community Cloud hosting is in the United States.
+   [omniroute]
+   endpoint = "https://YOUR_APPROVED_OMNIROUTE_HOST/v1"
+   api_key = "YOUR_OMNIROUTE_ENDPOINT_KEY"
+   model = "auto"
+   ```
+   The Firebase values are web-app client configuration, not a service-account key. Never add a Firebase service-account/private key. The OmniRoute endpoint must be reachable by the hosted app over HTTPS; `http://localhost:20128/v1` points to the Streamlit host and will not reach OmniRoute on your PC. Do not expose a local OmniRoute gateway directly to the public internet.
+4. Add the exact deployed `your-app-name.streamlit.app` hostname to Firebase Authentication's **Authorized domains**.
+5. Test sign-in and quiz generation with non-sensitive sample material before sharing the URL.
+
+Community Cloud installs the Linux OCR engine using [`packages.txt`](./packages.txt). Uploaded documents are processed by the Streamlit host. Selected source facts are sent to the configured AI gateway. Obtain school approval before sending student information or copyrighted source documents to hosting or AI providers. The app keeps the configured OmniRoute key server-side when set in Streamlit Secrets and hides the per-session key field from students.
 
 ## Question Generation:
 - Built-in questions use fact statements found in the selected material, turn those statements into direct concept/function questions, and select distractors from related terms in the same source. The app checks the answer against its source fact, requires four distinct source-derived options, and filters repeated stems/options before showing a quiz.
