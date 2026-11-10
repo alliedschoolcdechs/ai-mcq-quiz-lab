@@ -164,6 +164,13 @@ For PDFs with a topic or instructions and no page range, the app searches select
 
 For DOCX, XLSX, and CSV files, the full selected document is analyzed to find topic-matching question concepts; other clean concepts from that same document remain available as distractors. Parent unit/chapter headings are retained so entering a broad unit name can match facts under its subsections. Only selected PDF pages are used when page ranges are supplied. OCR results for individual PDF pages are cached for up to 24 hours. Document extraction and page searching run outside Streamlit's data-cache wrappers so progress updates remain compatible with Streamlit's layout lifecycle. Generation progress starts at 0% and advances through document reading, fact analysis, AI generation, and validation; PDF-reading progress is based on pages processed. The AI-generation stage waits for OmniRoute's response, so its internal progress is not available to the app.
 
+The quiz setup provides concise instruction templates for FBISE-style exams,
+concept mastery, real-world application, and comparison questions. Selecting a
+template fills the instructions field with an editable prompt; choose
+**Custom instructions** to start with a blank field. OmniRoute uses those
+instructions alongside source facts to create questions, then the app checks
+the results against the selected material.
+
 ## How to Build a Standalone Executable (.exe) for Lab PCs:
 1. Open your terminal in this folder and install PyInstaller:
    ```bash

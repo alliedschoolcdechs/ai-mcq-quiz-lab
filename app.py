@@ -41,6 +41,29 @@ APP_DIR = (
 LIBRARY_DIR = APP_DIR / "library"
 LIBRARY_DIR.mkdir(exist_ok=True)
 SUPPORTED_FILE_TYPES = {".pdf", ".docx", ".xlsx", ".csv", ".txt"}
+QUESTION_PROMPT_TEMPLATES = {
+    "FBISE-style exam setter": (
+        "Act as an experienced FBISE-style paper setter. Create clear, "
+        "curriculum-focused single-best-answer MCQs from the supplied source. "
+        "Test understanding and application; use four plausible options and "
+        "avoid copied statements, ambiguity, clues, or outside facts."
+    ),
+    "Concept mastery": (
+        "Act as an expert teacher. Write concise MCQs that reveal whether "
+        "students understand key ideas, purposes, and relationships. Use the "
+        "source only, with four plausible choices and one defensible answer."
+    ),
+    "Real-world application": (
+        "Act as a learning designer. Turn source concepts into short, relevant "
+        "scenarios that test how students apply what they learned. Keep every "
+        "answer grounded in the source and provide four plausible choices."
+    ),
+    "Compare and distinguish": (
+        "Act as a subject expert. Create focused MCQs that ask students to "
+        "compare concepts, identify differences, or recognize relationships. "
+        "Use only source-supported facts and four clear, plausible choices."
+    ),
+}
 
 
 def load_streamlit_secret_section(section_name):
@@ -49,6 +72,14 @@ def load_streamlit_secret_section(section_name):
     except StreamlitSecretNotFoundError:
         return {}
     return settings if isinstance(settings, Mapping) else {}
+
+
+def apply_question_prompt_template():
+    selected_template = st.session_state.get("question_prompt_template")
+    st.session_state["question_guidance"] = QUESTION_PROMPT_TEMPLATES.get(
+        selected_template,
+        "",
+    )
 
 
 FIREBASE_SECRET_SETTINGS = load_streamlit_secret_section("firebase")
@@ -2123,28 +2154,38 @@ if st.session_state.app_state == "upload":
                         )
                     )
                 with guidance_column:
+                    st.selectbox(
+                        "Instruction template",
+                        [
+                            "Custom instructions",
+                            *QUESTION_PROMPT_TEMPLATES,
+                        ],
+                        key="question_prompt_template",
+                        on_change=apply_question_prompt_template,
+                        help=(
+                            "Choose a concise starting prompt, then edit it below "
+                            "to match your class or assessment."
+                        ),
+                    )
                     question_guidance = st.text_area(
                         "Question focus or instructions (optional)",
-                        placeholder="e.g. Compare the functions of memory types.",
+                        placeholder=(
+                            "Add your own instructions or choose a template above."
+                        ),
                         max_chars=500,
-                        height=55,
+                        height=95,
+                        key="question_guidance",
                         help=(
-                            "Optional instructions control the question style and priority. "
-                            "For example, ask for comparisons, functions, purposes, or "
-                            "real-world applications. The instructions are applied to "
-                            "every generated question."
-                        )
+                            "Templates are starting points and remain fully editable. "
+                            "Your instructions guide the AI for every generated question."
+                        ),
                     )
-                st.caption(
-                        "Question generation runs locally with built-in source-based logic."
+                st.info(
+                    "**AI-powered, source-grounded questions.** OmniRoute analyzes "
+                    "your selected material and instructions to craft clear, "
+                    "concept-focused MCQs with plausible choices. Every answer is "
+                    "checked against the source before it reaches the quiz."
                 )
-                with st.expander("Question generation details"):
-                    st.caption(
-                        "The app extracts clear concepts and functions from the selected "
-                        "document, builds questions locally, and validates every answer "
-                        "against its source fact. No model download or AI service is required. "
-                        "Google sign-in is still required for the app."
-                    )
 
             page_ranges = st.text_input(
                 "PDF pages (optional)",
