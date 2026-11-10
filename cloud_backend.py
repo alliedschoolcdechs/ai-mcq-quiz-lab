@@ -15,7 +15,7 @@ def format_display_name(display_name):
     if not isinstance(display_name, str):
         return "Student"
     parts = display_name.split()
-    if not parts:
+    if not parts or any("@" in part for part in parts):
         return "Student"
     if len(parts) == 1:
         return parts[0]
@@ -245,6 +245,24 @@ class FirebaseClient:
         )
         self._request("DELETE", url)
 
+    def delete_document_fields(self, collection, document_id, field_names):
+        field_names = tuple(dict.fromkeys(field_names))
+        if not field_names:
+            return
+        url = (
+            f"{self.documents_url}/{quote(collection, safe='')}/"
+            f"{quote(document_id, safe='')}"
+        )
+        self._request(
+            "PATCH",
+            url,
+            params=[
+                ("updateMask.fieldPaths", field_name)
+                for field_name in field_names
+            ],
+            payload={"fields": {}},
+        )
+
     def list_documents(self, collection, page_size=1000):
         url = f"{self.documents_url}/{quote(collection, safe='')}"
         documents = []
@@ -290,6 +308,10 @@ class FirebaseClient:
         ]
 
     def save_attempt(self, attempt):
+        if "email" in attempt:
+            raise CloudBackendError(
+                "Quiz attempts must not include an email address."
+            )
         attempt_id = attempt["attemptId"]
         url = f"{self.documents_url}/attempts"
         try:
@@ -321,13 +343,12 @@ class FirebaseClient:
         membership = self.get_document("adminMembers", uid)
         return bool(membership and membership.get("active") is True)
 
-    def add_admin_member(self, uid, email, added_by, added_at):
+    def add_admin_member(self, uid, added_by, added_at):
         return self.put_document(
             "adminMembers",
             uid,
             {
                 "uid": uid,
-                "email": email,
                 "active": True,
                 "addedBy": added_by,
                 "addedAt": added_at,
@@ -386,7 +407,6 @@ def verify_firebase_id_token(config, id_token, timeout=20):
         raise CloudBackendError("Sign in with a Google account.")
     return {
         "uid": user["localId"],
-        "email": email,
         "displayName": (
             user.get("displayName", "").strip()
             if isinstance(user.get("displayName"), str)

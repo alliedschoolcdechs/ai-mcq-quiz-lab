@@ -41,7 +41,7 @@
       if (currentArgs.authenticated) {
         const identity = document.createElement("span");
         identity.className = "identity";
-        identity.textContent = currentArgs.email || "Signed in";
+        identity.textContent = currentArgs.displayName || "Signed in";
         const button = document.createElement("button");
         button.textContent = "Sign out";
         button.onclick = async () => {

@@ -74,6 +74,13 @@ The app accepts verified Google accounts. Users must sign in before accessing qu
 
 Data is stored in the school's Firebase project, not in an individual's Gmail inbox or Google Drive. The project owner controls the database and its retention. Quiz question text, selected answers, and answer keys are included in saved activity so authorized admins can review attempts.
 
+The app does not write account email addresses to Firestore. The UI displays
+names only, shortened to first and last name; a profile name that looks like an
+email address is replaced with the neutral label `Student`. Google/Firebase
+Authentication still processes and stores the email as part of the external
+sign-in account; that identity information is not controlled by the app's
+Firestore records.
+
 The app uses an **in-app admin group** stored in Firestore. The first admin must be bootstrapped once in Firebase Console; admins can then add or remove other users who have already signed in. No Google Group email or domain allowlist is required; any verified Google account can register.
 
 Scores are recorded from the local app after a quiz is completed. This shared dashboard is an activity and progress tracker, not a proctored or tamper-proof examination system.
@@ -88,11 +95,11 @@ Scores are recorded from the local app after a quiz is completed. This shared da
 6. Launch the app and sign in once with the intended first-admin Google account.
 7. In **Firebase Console → Authentication → Users**, copy that account's **UID**. In **Firestore → Data**, create a document in collection `adminMembers` with the document ID set to that UID and these fields:
    - `uid` — string, the same UID
-   - `email` — string, the admin's Google email
    - `active` — boolean, `true`
    - `addedBy` — string, `bootstrap`
    - `addedAt` — string, an ISO-8601 UTC timestamp
 8. Select **Refresh access** in the app. **Admin dashboard** will appear in the sidebar. Students must sign in once before an admin can add them to the in-app admin group.
+9. Publish the updated [`firestore.rules`](./firestore.rules). In the admin dashboard, use **Email privacy cleanup** to remove legacy email fields from existing Firestore profile, quiz, and admin-group documents.
 
 ### Shared PCs and EXE distribution
 

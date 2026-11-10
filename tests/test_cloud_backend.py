@@ -120,6 +120,44 @@ class FirebaseClientTests(unittest.TestCase):
         with self.assertRaisesRegex(CloudBackendError, "does not belong"):
             self.client.save_attempt(attempt)
 
+    def test_quiz_attempt_with_email_is_rejected_before_cloud_write(self):
+        self.client._request = Mock()
+
+        with self.assertRaisesRegex(CloudBackendError, "must not include"):
+            self.client.save_attempt({
+                "attemptId": "attempt-1",
+                "uid": "student-1",
+                "email": "student@example.com",
+            })
+
+        self.client._request.assert_not_called()
+
+    def test_deletes_selected_document_fields(self):
+        self.client._request = Mock(return_value={})
+
+        self.client.delete_document_fields("users", "student-1", ["email"])
+
+        request = self.client._request.call_args
+        self.assertEqual(request.args[0], "PATCH")
+        self.assertEqual(
+            request.kwargs["params"],
+            [("updateMask.fieldPaths", "email")],
+        )
+        self.assertEqual(request.kwargs["payload"], {"fields": {}})
+
+    def test_admin_membership_record_does_not_store_email(self):
+        self.client.put_document = Mock()
+
+        self.client.add_admin_member(
+            "student-1",
+            "admin-1",
+            "2026-11-10T00:00:00Z",
+        )
+
+        fields = self.client.put_document.call_args.args[2]
+        self.assertNotIn("email", fields)
+        self.assertEqual(fields["addedBy"], "admin-1")
+
     def test_document_is_created_when_patch_reports_missing(self):
         self.client._request = Mock(
             side_effect=[
@@ -177,7 +215,7 @@ class FirebaseClientTests(unittest.TestCase):
         user = verify_firebase_id_token(self.config, "valid-token")
 
         self.assertEqual(user["uid"], "verified-uid")
-        self.assertEqual(user["email"], "Student@School.example")
+        self.assertNotIn("email", user)
         self.assertEqual(user["displayName"], "Student")
         post.assert_called_once()
 
@@ -223,6 +261,12 @@ class DisplayNameTests(unittest.TestCase):
 
     def test_uses_neutral_fallback_when_name_is_missing(self):
         self.assertEqual(format_display_name(""), "Student")
+
+    def test_does_not_render_email_as_a_display_name(self):
+        self.assertEqual(format_display_name("student@example.com"), "Student")
+
+    def test_displays_only_first_and_last_name(self):
+        self.assertEqual(format_display_name("Alex Morgan Lee"), "Alex Lee")
 
 
 if __name__ == "__main__":

@@ -16,26 +16,33 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.auth.uid == uid
         && request.resource.data.uid == uid
-        && request.resource.data.email == request.auth.token.email
         && request.resource.data.keys().hasOnly([
-          'uid', 'email', 'displayName', 'photoUrl', 'createdAt',
+          'uid', 'displayName', 'photoUrl', 'createdAt',
           'lastLoginAt', 'lastAttemptAt', 'lastAttemptId',
           'lastScorePct', 'lastAttemptGraded', 'documentCache'
         ]);
       allow update: if signedIn()
-        && request.auth.uid == uid
-        && request.resource.data.uid == resource.data.uid
-        && request.resource.data.email == resource.data.email
-        && request.resource.data.email == request.auth.token.email
-        && request.resource.data.keys().hasOnly([
-          'uid', 'email', 'displayName', 'photoUrl', 'createdAt',
-          'lastLoginAt', 'lastAttemptAt', 'lastAttemptId',
-          'lastScorePct', 'lastAttemptGraded', 'documentCache'
-        ])
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'displayName', 'photoUrl', 'lastLoginAt', 'lastAttemptAt',
-          'lastAttemptId', 'lastScorePct', 'lastAttemptGraded', 'documentCache'
-        ]);
+        && (
+          (
+            request.auth.uid == uid
+            && request.resource.data.uid == resource.data.uid
+            && request.resource.data.keys().hasOnly([
+              'uid', 'displayName', 'photoUrl', 'createdAt',
+              'lastLoginAt', 'lastAttemptAt', 'lastAttemptId',
+              'lastScorePct', 'lastAttemptGraded', 'documentCache'
+            ])
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'displayName', 'photoUrl', 'lastLoginAt', 'lastAttemptAt',
+              'lastAttemptId', 'lastScorePct', 'lastAttemptGraded',
+              'documentCache', 'email'
+            ])
+          )
+          || (
+            isAdmin()
+            && !request.resource.data.keys().hasAny(['email'])
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email'])
+          )
+        );
       allow delete: if false;
     }
 
@@ -44,14 +51,13 @@ service cloud.firestore {
         && (resource.data.uid == request.auth.uid || isAdmin());
       allow create: if signedIn()
         && request.resource.data.keys().hasOnly([
-          'attemptId', 'uid', 'email', 'displayName', 'studentName',
+          'attemptId', 'uid', 'displayName', 'studentName',
           'fileName', 'quizMode', 'questionSource', 'graded', 'scorePct',
           'correctCount', 'total', 'startedAt', 'completedAt',
           'durationSeconds', 'answers'
         ])
         && request.resource.data.attemptId == attemptId
         && request.resource.data.uid == request.auth.uid
-        && request.resource.data.email == request.auth.token.email
         && request.resource.data.graded is bool
         && request.resource.data.total is int
         && request.resource.data.total > 0
@@ -66,13 +72,19 @@ service cloud.firestore {
             && request.resource.data.scorePct <= 100
           )
         );
-      allow update, delete: if false;
+      allow update: if signedIn()
+        && (resource.data.uid == request.auth.uid || isAdmin())
+        && !request.resource.data.keys().hasAny(['email'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['email']);
+      allow delete: if false;
     }
 
     match /adminMembers/{uid} {
       allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
       allow list: if isAdmin();
-      allow create, update, delete: if isAdmin();
+      allow create, update: if isAdmin()
+        && !request.resource.data.keys().hasAny(['email']);
+      allow delete: if isAdmin();
     }
   }
 }

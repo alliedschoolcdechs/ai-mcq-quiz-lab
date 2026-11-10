@@ -1468,9 +1468,8 @@ def build_attempt_record():
     return {
         "attemptId": st.session_state.quiz_attempt_id,
         "uid": user["uid"],
-        "email": user["email"],
-        "displayName": user["displayName"],
-        "studentName": st.session_state.student_name,
+        "displayName": format_display_name(user.get("displayName")),
+        "studentName": format_display_name(st.session_state.student_name),
         "fileName": st.session_state.file_name,
         "quizMode": st.session_state.quiz_mode,
         "questionSource": st.session_state.question_source,
@@ -1543,21 +1542,19 @@ def render_attempt_history(attempts, show_student=True):
             "Duration (seconds)": attempt.get("durationSeconds", 0),
         }
         if show_student:
-            row["Student"] = attempt.get("displayName", "")
-            row["Email"] = attempt.get("email", "")
+            row["Student"] = format_display_name(attempt.get("displayName"))
         rows.append(row)
     st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
     for attempt in attempts[:100]:
         title = (
             f"{format_attempt_time(attempt.get('completedAt'))} · "
-            f"{attempt.get('displayName', attempt.get('email', 'Student'))} · "
+            f"{format_display_name(attempt.get('displayName'))} · "
             f"{attempt.get('fileName', 'Quiz')}"
         )
         with st.expander(title):
             st.caption(
-                f"{attempt.get('email', '')} · {attempt.get('quizMode', '')} · "
-                f"{attempt.get('questionSource', '')}"
+                f"{attempt.get('quizMode', '')} · {attempt.get('questionSource', '')}"
             )
             st.write(
                 "Result: "
@@ -1580,6 +1577,35 @@ def render_attempt_history(attempts, show_student=True):
                     f"Topic: {answer.get('topic') or '—'} · "
                     f"Source: {answer.get('sourceLocation') or '—'}"
                 )
+
+
+def remove_cloud_email_fields(client):
+    collections = ("users", "attempts", "adminMembers")
+    documents_by_collection = {}
+    for collection in collections:
+        documents, capped = client.list_documents(collection)
+        if capped:
+            raise CloudBackendError(
+                f"The {collection} collection exceeds the cleanup safety limit. "
+                "No records were changed."
+            )
+        documents_by_collection[collection] = documents
+
+    removed_counts = {}
+    for collection, documents in documents_by_collection.items():
+        removed = 0
+        for document in documents:
+            if "email" not in document:
+                continue
+            document_id = document.get("_id")
+            if not isinstance(document_id, str) or not document_id:
+                raise CloudBackendError(
+                    f"Could not identify a document in {collection} for cleanup."
+                )
+            client.delete_document_fields(collection, document_id, ["email"])
+            removed += 1
+        removed_counts[collection] = removed
+    return removed_counts
 
 
 # ==========================================
@@ -1624,8 +1650,10 @@ if firebase_config:
             "appId": firebase_config.app_id,
         },
         authenticated=st.session_state.cloud_user is not None,
-        email=(
-            st.session_state.cloud_user["email"]
+        displayName=(
+            format_display_name(
+                st.session_state.cloud_user.get("displayName")
+            )
             if st.session_state.cloud_user
             else ""
         ),
@@ -1668,13 +1696,29 @@ if firebase_config:
                     )
                     profile_fields = {
                         "uid": authenticated_user["uid"],
-                        "email": authenticated_user["email"],
-                        "displayName": authenticated_user["displayName"],
+                        "displayName": format_display_name(
+                            authenticated_user.get("displayName")
+                        ),
                         "photoUrl": authenticated_user["photoUrl"],
                         "lastLoginAt": utc_timestamp(),
                     }
                     if not profile:
                         profile_fields["createdAt"] = utc_timestamp()
+                    elif "email" in profile:
+                        client.delete_document_fields(
+                            "users",
+                            authenticated_user["uid"],
+                            ["email"],
+                        )
+                    for attempt in client.list_user_attempts(
+                        authenticated_user["uid"]
+                    ):
+                        if "email" in attempt:
+                            client.delete_document_fields(
+                                "attempts",
+                                attempt["_id"],
+                                ["email"],
+                            )
                     client.put_document(
                         "users",
                         authenticated_user["uid"],
@@ -1795,10 +1839,7 @@ with st.sidebar:
 
 if st.session_state.page_view == "profile":
     st.title("My profile and quiz activity")
-    st.write(
-        f"**{st.session_state.cloud_user['displayName']}** · "
-        f"{st.session_state.cloud_user['email']}"
-    )
+    st.write(f"**{format_display_name(st.session_state.cloud_user.get('displayName'))}**")
     try:
         user_attempts = cloud_client.list_user_attempts(
             st.session_state.cloud_user["uid"]
@@ -1849,25 +1890,40 @@ if st.session_state.page_view == "admin":
             "The dashboard reached its 10,000-record safety limit. "
             "Some older records may not be shown."
         )
+    with st.expander("Email privacy cleanup"):
+        st.caption(
+            "Remove legacy email fields from existing Firestore profile, quiz, "
+            "and admin-group records. New app records no longer include emails."
+        )
+        if st.button("Remove stored email fields from cloud records"):
+            try:
+                removed_counts = remove_cloud_email_fields(cloud_client)
+                total_removed = sum(removed_counts.values())
+                st.success(
+                    f"Removed email fields from {total_removed} cloud records."
+                )
+            except CloudBackendError as error:
+                st.error(f"Could not complete email privacy cleanup: {error}")
 
     activity_tab, students_tab, admins_tab = st.tabs(
         ["Attempt activity", "Student profiles", "Admin group"]
     )
     with activity_tab:
-        email_filter = st.text_input(
-            "Filter by student email",
-            key="admin_email_filter",
-        ).strip().lower()
+        student_filter = st.text_input(
+            "Filter by student name",
+            key="admin_student_filter",
+        ).strip().casefold()
         filtered_attempts = [
             attempt for attempt in admin_attempts
-            if email_filter in attempt.get("email", "").lower()
+            if student_filter in format_display_name(
+                attempt.get("displayName")
+            ).casefold()
         ]
         render_attempt_history(filtered_attempts)
     with students_tab:
         user_rows = [
             {
-                "Student": user.get("displayName", ""),
-                "Email": user.get("email", ""),
+                "Student": format_display_name(user.get("displayName")),
                 "Last login": format_attempt_time(user.get("lastLoginAt")),
                 "Created": format_attempt_time(user.get("createdAt")),
                 "Last attempt": format_attempt_time(user.get("lastAttemptAt")),
@@ -1880,7 +1936,9 @@ if st.session_state.page_view == "admin":
             }
             for user in sorted(
                 admin_users,
-                key=lambda item: item.get("email", "").lower(),
+                key=lambda item: format_display_name(
+                    item.get("displayName")
+                ).casefold(),
             )
         ]
         if user_rows:
@@ -1903,8 +1961,8 @@ if st.session_state.page_view == "admin":
             selected_admin = st.selectbox(
                 "Add a registered user",
                 eligible_users,
-                format_func=lambda user: (
-                    f"{user.get('displayName', '')} <{user.get('email', '')}>"
+                format_func=lambda user: format_display_name(
+                    user.get("displayName")
                 ),
                 key="admin_member_to_add",
             )
@@ -1912,8 +1970,7 @@ if st.session_state.page_view == "admin":
                 try:
                     cloud_client.add_admin_member(
                         selected_admin["uid"],
-                        selected_admin["email"],
-                        st.session_state.cloud_user["email"],
+                        st.session_state.cloud_user["uid"],
                         utc_timestamp(),
                     )
                     st.success("User added to the admin group.")
@@ -1922,10 +1979,18 @@ if st.session_state.page_view == "admin":
                     st.error(f"Could not add this admin: {error}")
         else:
             st.info("Every registered user is already an admin, or no users exist.")
+        users_by_uid = {
+            user.get("uid"): user
+            for user in admin_users
+            if user.get("uid")
+        }
         for member in admin_members:
-            member_email = member.get("email", member.get("_id", ""))
+            member_user = users_by_uid.get(member.get("uid"), {})
+            member_name = format_display_name(
+                member_user.get("displayName", member.get("displayName"))
+            )
             member_columns = st.columns([4, 1])
-            member_columns[0].write(member_email)
+            member_columns[0].write(member_name)
             if member.get("uid") != st.session_state.cloud_user["uid"]:
                 if member_columns[1].button(
                     "Remove",
@@ -1933,7 +1998,7 @@ if st.session_state.page_view == "admin":
                 ):
                     try:
                         cloud_client.remove_admin_member(member["uid"])
-                        st.success(f"Removed {member_email} from the admin group.")
+                        st.success(f"Removed {member_name} from the admin group.")
                         st.rerun()
                     except CloudBackendError as error:
                         st.error(f"Could not remove this admin: {error}")
