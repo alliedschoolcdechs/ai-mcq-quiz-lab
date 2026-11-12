@@ -62,7 +62,7 @@ class SourceGroundedQuestionTests(unittest.TestCase):
             },
         ]
 
-    def test_builds_source_backed_four_choice_questions_without_a_model(self):
+    def test_builds_source_backed_four_choice_questions_locally(self):
         questions = generate_question_items(
             self.records,
             5,
@@ -96,29 +96,6 @@ class SourceGroundedQuestionTests(unittest.TestCase):
         self.assertIn("used to store", ram["question"])
         self.assertEqual(ram["question_type"], "function")
 
-    def test_guidance_changes_questions_to_application_style(self):
-        questions = generate_question_items(
-            self.records,
-            1,
-            question_guidance="Use real-world scenarios and application questions.",
-            rng=random.Random(4),
-        )
-
-        self.assertEqual(questions[0]["question_type"], "application")
-        self.assertIn("student needs", questions[0]["question"])
-        self.assertIn("Which concept", questions[0]["question"])
-
-    def test_guidance_changes_questions_to_comparison_style(self):
-        questions = generate_question_items(
-            self.records,
-            1,
-            question_guidance="Compare and contrast the memory concepts.",
-            rng=random.Random(4),
-        )
-
-        self.assertEqual(questions[0]["question_type"], "comparison")
-        self.assertIn("distinguishing", questions[0]["question"])
-
     def test_memory_question_uses_same_topic_as_its_distractors(self):
         questions = generate_question_items(
             self.records,
@@ -129,6 +106,46 @@ class SourceGroundedQuestionTests(unittest.TestCase):
         ram = next(question for question in questions if question["answer"] == "RAM")
         memory_concepts = {"RAM", "ROM", "Cache memory", "Virtual memory"}
         self.assertTrue(set(ram["options"]).issubset(memory_concepts))
+
+    def test_difficulty_changes_distractor_similarity(self):
+        easy_questions = generate_question_items(
+            self.records,
+            6,
+            rng=random.Random(7),
+            difficulty="Easy",
+        )
+        hard_questions = generate_question_items(
+            self.records,
+            6,
+            rng=random.Random(7),
+            difficulty="Hard",
+        )
+
+        easy_ram = next(q for q in easy_questions if q["answer"] == "RAM")
+        hard_ram = next(q for q in hard_questions if q["answer"] == "RAM")
+        self.assertNotEqual(easy_ram["options"], hard_ram["options"])
+
+    def test_rejects_unsupported_difficulty(self):
+        with self.assertRaisesRegex(ValueError, "difficulty must be"):
+            generate_question_items(self.records, 1, difficulty="Expert")
+
+    def test_omits_near_duplicate_definition_as_distractor(self):
+        near_duplicate = {
+            "id": "F7",
+            "concept": "Cache storage",
+            "definition": self.records[2]["definition"],
+            "unit": "Computer memory",
+        }
+        questions = generate_question_items(
+            [*self.records, near_duplicate],
+            7,
+            rng=random.Random(7),
+        )
+
+        cache_question = next(
+            q for q in questions if q["answer"] == "Cache memory"
+        )
+        self.assertNotIn("Cache storage", cache_question["options"])
 
     def test_filtered_targets_can_use_related_facts_as_distractors(self):
         questions = generate_question_items(

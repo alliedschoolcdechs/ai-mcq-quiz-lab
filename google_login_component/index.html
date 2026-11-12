@@ -31,6 +31,8 @@
     let auth = null;
     let currentArgs = null;
     let lastLogoutNonce = null;
+    let signInPending = false;
+    let signInAttempt = 0;
 
     function render() {
       if (!currentArgs) return;
@@ -57,21 +59,37 @@
         card.append(identity, button);
       } else {
         const button = document.createElement("button");
-        button.textContent = "Continue with Google";
+        button.textContent = signInPending
+          ? "Connecting to Google..."
+          : "Continue with Google";
+        button.disabled = signInPending;
         button.onclick = async () => {
-          button.disabled = true;
-          button.textContent = "Connecting to Google...";
+          if (signInPending) return;
+          const attempt = ++signInAttempt;
+          signInPending = true;
+          render();
+          const timeout = setTimeout(() => {
+            if (attempt !== signInAttempt) return;
+            signInPending = false;
+            render();
+            showError(
+              "Google sign-in did not respond. Please retry; if it happens " +
+              "again, allow pop-ups for this app."
+            );
+          }, 15000);
           try {
             const provider = new firebase.auth.GoogleAuthProvider();
-            provider.setCustomParameters({ prompt: "select_account" });
-            const result = await auth.signInWithPopup(provider);
-            const idToken = await result.user.getIdToken();
-            send({ event: "signed_in", idToken, nonce: currentArgs.logoutNonce });
+            await auth.signInWithPopup(provider);
           } catch (error) {
-            button.disabled = false;
-            button.textContent = "Continue with Google";
+            clearTimeout(timeout);
+            if (attempt !== signInAttempt) return;
+            signInPending = false;
+            render();
             showError(error.message);
+            return;
           }
+          clearTimeout(timeout);
+          if (attempt === signInAttempt) signInPending = false;
         };
         card.append(button);
       }
@@ -105,12 +123,18 @@
           auth = firebase.auth();
           auth.onIdTokenChanged(async (user) => {
             if (user) {
-              const idToken = await user.getIdToken();
-              send({
-                event: currentArgs.authenticated ? "token_refreshed" : "signed_in",
-                idToken,
-                nonce: currentArgs.logoutNonce
-              });
+              try {
+                const idToken = await user.getIdToken();
+                send({
+                  event: currentArgs.authenticated
+                    ? "token_refreshed"
+                    : "signed_in",
+                  idToken,
+                  nonce: currentArgs.logoutNonce
+                });
+              } catch (error) {
+                showError(error.message);
+              }
             }
           });
         } catch (error) {

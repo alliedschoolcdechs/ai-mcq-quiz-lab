@@ -54,15 +54,7 @@ def extract_exam_facts(source_lines):
             not is_readable_source_text(text)
             or re.search(r"\.{3,}|_{3,}|…{2,}", text)
             or len(re.findall(r"\b\d+(?:\.\d+)+\s+[A-Z]", text)) > 1
-            or re.search(
-                r"\b(?:examples?|for example|for instance)\b|\be\.g\.(?:\s|$)|"
-                r"\b(?:fig(?:ure)?\.?\s*\d+|fig\.|table\s+\d+|diagram|illustration)\b|"
-                r"\bsee\s+(?:fig(?:ure)?|table)|\bshown\s+in\s+(?:fig(?:ure)?|table)\b",
-                text,
-                flags=re.IGNORECASE
-            )
             or text.count("+") > 1
-            or len(re.findall(r"\b(?:and|or)\b", text, flags=re.IGNORECASE)) > 2
         ):
             continue
 
@@ -74,6 +66,17 @@ def extract_exam_facts(source_lines):
                 not is_readable_source_text(sentence)
                 or "?" in sentence
                 or any(lowered.startswith(prefix) for prefix in NON_DEFINITION_STARTS)
+                or re.search(
+                    r"\b(?:examples?|for example|for instance)\b|"
+                    r"\be\.g\.(?:\s|$)|"
+                    r"\b(?:fig(?:ure)?\.?\s*\d+|fig\.|table\s+\d+|"
+                    r"diagram|illustration)\b|"
+                    r"\bsee\s+(?:fig(?:ure)?|table)|"
+                    r"\bshown\s+in\s+(?:fig(?:ure)?|table)\b",
+                    sentence,
+                    flags=re.IGNORECASE
+                )
+                or len(re.findall(r"\b(?:and|or)\b", sentence, flags=re.IGNORECASE)) > 2
             ):
                 continue
             words = re.findall(r"[A-Za-z][A-Za-z'-]*", sentence)

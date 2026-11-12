@@ -175,6 +175,45 @@ class FirebaseClientTests(unittest.TestCase):
         self.assertEqual(result["_id"], "student-1")
         self.assertEqual(self.client._request.call_args_list[1].args[0], "POST")
 
+    def test_create_document_uses_one_request_for_new_profile(self):
+        self.client._request = Mock(return_value={
+            "name": "projects/school-quizzes/databases/(default)/documents/"
+            "users/student-1",
+            "fields": {"uid": {"stringValue": "student-1"}},
+        })
+
+        result = self.client.create_document(
+            "users",
+            "student-1",
+            {"uid": "student-1"},
+        )
+
+        self.assertEqual(result["uid"], "student-1")
+        self.client._request.assert_called_once()
+        request = self.client._request.call_args
+        self.assertEqual(request.args[0], "POST")
+        self.assertEqual(
+            request.kwargs["params"],
+            {"documentId": "student-1"},
+        )
+
+    def test_create_document_updates_if_profile_was_created_concurrently(self):
+        self.client._request = Mock(
+            side_effect=[
+                CloudBackendError("HTTP 409 ALREADY_EXISTS"),
+                {"name": "users/student-1", "fields": {}},
+            ]
+        )
+
+        self.client.create_document(
+            "users",
+            "student-1",
+            {"uid": "student-1"},
+        )
+
+        self.assertEqual(self.client._request.call_count, 2)
+        self.assertEqual(self.client._request.call_args_list[1].args[0], "PATCH")
+
     def test_student_attempt_query_is_scoped_to_uid(self):
         self.client._request = Mock(return_value=[
             {

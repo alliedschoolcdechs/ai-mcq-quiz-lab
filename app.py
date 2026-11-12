@@ -4,12 +4,11 @@ import html
 import hashlib
 import difflib
 import json
-import random
 import re
 import shutil
 import sys
 import uuid
-from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 import pandas as pd
@@ -41,54 +40,10 @@ APP_DIR = (
 LIBRARY_DIR = APP_DIR / "library"
 LIBRARY_DIR.mkdir(exist_ok=True)
 SUPPORTED_FILE_TYPES = {".pdf", ".docx", ".xlsx", ".csv", ".txt"}
-QUESTION_PROMPT_TEMPLATES = {
-    "FBISE-style exam setter": (
-        "Act as an experienced FBISE-style paper setter. Create clear, "
-        "curriculum-focused single-best-answer MCQs from the supplied source. "
-        "Test understanding and application; use four plausible options and "
-        "avoid copied statements, ambiguity, clues, or outside facts."
-    ),
-    "Concept mastery": (
-        "Act as an expert teacher. Write concise MCQs that reveal whether "
-        "students understand key ideas, purposes, and relationships. Use the "
-        "source only, with four plausible choices and one defensible answer."
-    ),
-    "Real-world application": (
-        "Act as a learning designer. Turn source concepts into short, relevant "
-        "scenarios that test how students apply what they learned. Keep every "
-        "answer grounded in the source and provide four plausible choices."
-    ),
-    "Compare and distinguish": (
-        "Act as a subject expert. Create focused MCQs that ask students to "
-        "compare concepts, identify differences, or recognize relationships. "
-        "Use only source-supported facts and four clear, plausible choices."
-    ),
-}
-
-
-def load_streamlit_secret_section(section_name):
-    try:
-        settings = st.secrets.get(section_name, {})
-    except StreamlitSecretNotFoundError:
-        return {}
-    return settings if isinstance(settings, Mapping) else {}
-
-
-def apply_question_prompt_template():
-    selected_template = st.session_state.get("question_prompt_template")
-    st.session_state["question_guidance"] = QUESTION_PROMPT_TEMPLATES.get(
-        selected_template,
-        "",
-    )
-
-
-FIREBASE_SECRET_SETTINGS = load_streamlit_secret_section("firebase")
-OMNIROUTE_SECRET_SETTINGS = load_streamlit_secret_section("omniroute")
-HOSTED_DEPLOYMENT = bool(FIREBASE_SECRET_SETTINGS)
 
 # Page Config
 st.set_page_config(
-    page_title="AI MCQ Generator & Quiz Lab",
+    page_title="MCQ Generator & Quiz Lab",
     page_icon="🎓",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -346,25 +301,6 @@ if "attempt_saved" not in st.session_state:
     st.session_state.attempt_saved = False
 if "document_cache" not in st.session_state:
     st.session_state.document_cache = {}
-if "omniroute_endpoint" not in st.session_state:
-    st.session_state.omniroute_endpoint = os.environ.get(
-        "OMNIROUTE_ENDPOINT",
-        OMNIROUTE_SECRET_SETTINGS.get(
-            "endpoint",
-            "http://localhost:20128/v1",
-        ),
-    )
-if "omniroute_api_key" not in st.session_state:
-    st.session_state.omniroute_api_key = os.environ.get(
-        "OMNIROUTE_API_KEY",
-        "",
-    )
-if "omniroute_model" not in st.session_state:
-    st.session_state.omniroute_model = os.environ.get(
-        "OMNIROUTE_MODEL",
-        OMNIROUTE_SECRET_SETTINGS.get("model", "auto"),
-    )
-
 # ==========================================
 # DOCUMENT TEXT EXTRACTOR
 # ==========================================
@@ -773,16 +709,8 @@ def start_quiz(questions, student_name, file_name, quiz_mode, question_source):
     st.session_state.app_state = "quiz"
 
 
-SEARCH_INSTRUCTION_WORDS = {
-    "answer", "asking", "based", "choose", "choices", "concept", "conceptual",
-    "create", "focus", "generate", "include", "make", "mcq", "mcqs",
-    "multiple", "option", "options", "question", "questions", "quiz", "select",
-    "student", "test", "type", "types", "use", "using"
-}
-
-
 def search_terms(query):
-    excluded = QUESTION_STOP_WORDS | SEARCH_INSTRUCTION_WORDS | {
+    excluded = TOPIC_STOP_WORDS | {
         "as", "at", "by", "for", "in", "of", "on", "to"
     }
     return {
@@ -810,11 +738,11 @@ def search_terms_match(query_terms, content_terms):
     return bool(query_terms)
 
 
-def locate_pdf_pages(file_bytes, query, instruction_search=False, _progress_callback=None):
+def locate_pdf_pages(file_bytes, query, _progress_callback=None):
     terms = search_terms(query)
     if not terms:
         raise ValueError(
-            "The topic/instructions do not include searchable subject terms. "
+            "The topic or unit does not include searchable subject terms. "
             "Enter a topic or unit, or provide PDF page ranges."
         )
 
@@ -824,12 +752,7 @@ def locate_pdf_pages(file_bytes, query, instruction_search=False, _progress_call
     for page_number, page in enumerate(reader.pages, start=1):
         page_text = page.extract_text() or ""
         page_words = search_terms(page_text)
-        matched = (
-            bool(terms & page_words)
-            if instruction_search
-            else search_terms_match(terms, page_words)
-        )
-        if matched:
+        if search_terms_match(terms, page_words):
             matched_pages.append(page_number)
         if _progress_callback:
             progress = 5 + int(25 * page_number / max(1, page_count))
@@ -845,7 +768,6 @@ def locate_library_pdf_pages(
     modified_ns,
     file_size,
     query,
-    instruction_search=False,
     _progress_callback=None
 ):
     library_path = LIBRARY_DIR / Path(file_name).name
@@ -855,7 +777,6 @@ def locate_library_pdf_pages(
     return locate_pdf_pages(
         library_path.read_bytes(),
         query,
-        instruction_search,
         _progress_callback
     )
 
@@ -863,7 +784,7 @@ def locate_library_pdf_pages(
 # ==========================================
 # MCQ GENERATOR
 # ==========================================
-QUESTION_STOP_WORDS = {
+TOPIC_STOP_WORDS = {
     "about", "after", "again", "against", "also", "among", "and", "any",
     "are", "because", "been", "before", "being", "between", "both", "but",
     "can", "could", "does", "each", "either", "every", "from", "further",
@@ -880,211 +801,12 @@ QUESTION_STOP_WORDS = {
 }
 
 
-def _omniroute_chat(messages, temperature=0.2):
-    secret_endpoint = OMNIROUTE_SECRET_SETTINGS.get("endpoint")
-    secret_api_key = OMNIROUTE_SECRET_SETTINGS.get("api_key")
-    secret_model = OMNIROUTE_SECRET_SETTINGS.get("model")
-    if HOSTED_DEPLOYMENT and not secret_endpoint:
-        raise RuntimeError(
-            "AI generation is not configured by the app administrator. "
-            "Add the OmniRoute endpoint to the app's Streamlit Secrets."
-        )
-    if HOSTED_DEPLOYMENT:
-        endpoint_value = secret_endpoint
-        api_key_value = secret_api_key or ""
-        model_value = secret_model or "auto"
-    else:
-        endpoint_value = secret_endpoint or st.session_state.get(
-            "omniroute_endpoint",
-            os.environ.get("OMNIROUTE_ENDPOINT", "http://localhost:20128/v1"),
-        )
-        api_key_value = secret_api_key or st.session_state.get(
-            "omniroute_api_key",
-            os.environ.get("OMNIROUTE_API_KEY", ""),
-        )
-        model_value = secret_model or st.session_state.get(
-            "omniroute_model",
-            os.environ.get("OMNIROUTE_MODEL", "auto"),
-        )
-    endpoint = str(endpoint_value).strip().rstrip("/")
-    api_key = str(api_key_value).strip()
-    model = str(model_value).strip()
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    if not model or model.casefold() == "discover":
-        model_response = requests.get(
-            f"{endpoint}/models",
-            headers=headers,
-            timeout=15,
-        )
-        model_response.raise_for_status()
-        models = model_response.json().get("data", [])
-        if not models:
-            raise RuntimeError(
-                "OmniRoute returned no available models. Set OMNIROUTE_MODEL "
-                "to a model configured in OmniRoute."
-            )
-        model = models[0].get("id")
-    if not model:
-        raise RuntimeError("OmniRoute did not provide a usable model identifier.")
-
-    response = requests.post(
-        f"{endpoint}/chat/completions",
-        headers=headers,
-        json={
-            "model": model,
-            "messages": messages,
-            "temperature": temperature,
-            "response_format": {"type": "json_object"},
-        },
-        timeout=120,
-    )
-    response.raise_for_status()
-    payload = response.json()
-    try:
-        content = payload["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as error:
-        raise RuntimeError("OmniRoute returned an unexpected chat response.") from error
-    if not isinstance(content, str) or not content.strip():
-        raise RuntimeError("OmniRoute returned an empty chat response.")
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError as error:
-        raise RuntimeError("OmniRoute returned invalid JSON.") from error
-
-
-def generate_omniroute_question_items(
-    records,
-    num_questions,
-    question_guidance,
-):
-    source_facts = [
-        {
-            "id": record["id"],
-            "concept": record["concept"],
-            "definition": record["definition"],
-            "unit": record.get("unit"),
-        }
-        for record in records
-    ]
-    guidance = question_guidance.strip() or (
-        "Create clear conceptual and application-oriented questions that test "
-        "understanding rather than asking students to repeat a sentence."
-    )
-    system_prompt = (
-        "You create high-quality school-level multiple-choice questions. "
-        "Return JSON only with an object containing an 'questions' array. "
-        "Every question must test understanding of exactly one supplied concept. "
-        "Do not copy a source statement into the question. Transform it into a "
-        "meaningful knowledge, purpose, comparison, or application question. "
-        "Use exactly four plausible, distinct concept labels as options. "
-        "The answer must be one of those labels and must be supported by its "
-        "source fact. Explanations must state why the answer fits and why the "
-        "other choices do not, using only the supplied facts. Follow the user's "
-        "instructions exactly when they are compatible with these rules."
-    )
-    user_prompt = json.dumps(
-        {
-            "instructions": guidance,
-            "number_of_questions": num_questions,
-            "source_facts": source_facts,
-            "required_question_fields": [
-                "source_fact_id",
-                "question",
-                "question_type",
-                "options",
-                "answer",
-                "explanation",
-            ],
-            "allowed_question_types": [
-                "function",
-                "purpose",
-                "relationship",
-                "application",
-                "distinction",
-                "process",
-                "comparison",
-            ],
-        },
-        ensure_ascii=True,
-    )
-    result = _omniroute_chat(
-        [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0.25,
-    )
-    questions = result.get("questions") if isinstance(result, dict) else None
-    if not isinstance(questions, list):
-        raise RuntimeError("OmniRoute response did not contain a questions array.")
-    return questions
-
-
-def improve_omniroute_result_reasons(wrong_answers):
-    if not wrong_answers:
-        return []
-    result = _omniroute_chat(
-        [
-            {
-                "role": "system",
-                "content": (
-                    "You are an educational assessment reviewer. Return JSON only "
-                    "with a 'reviews' array in the same order as the supplied items. "
-                    "For each item, write a precise, student-friendly 'correct_reason' "
-                    "and 'incorrect_reason'. Explain the concept tested, distinguish "
-                    "the selected option from the correct option, and use only the "
-                    "source facts supplied. Do not invent facts or blame the student."
-                ),
-            },
-            {
-                "role": "user",
-                "content": json.dumps(
-                    {
-                        "items": [
-                            {
-                                "question": item["question"],
-                                "selected_answer": item["user_answer"],
-                                "correct_answer": item["correct_answer"],
-                                "source_fact": item.get("source_text", ""),
-                                "selected_option_fact": item.get(
-                                    "selected_option_fact", ""
-                                ),
-                            }
-                            for item in wrong_answers
-                        ]
-                    },
-                    ensure_ascii=True,
-                ),
-            },
-        ],
-        temperature=0.15,
-    )
-    reviews = result.get("reviews") if isinstance(result, dict) else None
-    if not isinstance(reviews, list) or len(reviews) != len(wrong_answers):
-        raise RuntimeError(
-            "OmniRoute returned an incomplete result explanation response."
-        )
-    for review in reviews:
-        if (
-            not isinstance(review, dict)
-            or not isinstance(review.get("correct_reason"), str)
-            or not review["correct_reason"].strip()
-            or not isinstance(review.get("incorrect_reason"), str)
-            or not review["incorrect_reason"].strip()
-        ):
-            raise RuntimeError("OmniRoute returned an invalid result explanation.")
-    return reviews
-
-
 def generate_mcqs_from_source(
     candidates,
     fact_pool,
     num_questions,
-    question_guidance,
     report_progress,
+    difficulty="Medium",
 ):
     unique_facts = []
     facts_by_topic = {}
@@ -1095,16 +817,15 @@ def generate_mcqs_from_source(
         definition = definition_fragment(fact)
         if not definition:
             continue
-        fact_id = f"F{len(unique_facts) + 1}"
         record = {
-            "id": fact_id,
+            "id": f"F{len(unique_facts) + 1}",
             "concept": fact["topic"],
             "definition": definition,
             "unit": fact.get("unit"),
-            "unit_group": fact.get("unit_group")
+            "unit_group": fact.get("unit_group"),
         }
         unique_facts.append((record, fact))
-        facts_by_topic[topic_key] = (record, fact)
+        facts_by_topic[topic_key] = fact
 
     candidate_fact_objects = {id(fact) for fact in candidates}
     candidate_ids = {
@@ -1116,155 +837,82 @@ def generate_mcqs_from_source(
         report_progress(
             100,
             "The selected source needs at least four distinct, source-backed concepts "
-            "to create credible multiple-choice options."
+            "to create credible multiple-choice options.",
         )
         return []
 
-    source_facts = [record for record, _ in unique_facts]
-    question_records = [
-        record for record, fact in unique_facts
-        if id(fact) in candidate_fact_objects
-    ]
-    report_progress(80, "Generating grounded questions with OmniRoute AI.")
-    generated_questions = generate_omniroute_question_items(
-        source_facts,
-        num_questions,
-        question_guidance,
-    )
-
-    report_progress(94, "Checking question accuracy, source support, and distinct choices.")
-    labels_by_key = {
-        fact["topic"].casefold(): fact["topic"]
-        for _, fact in unique_facts
+    facts_by_id = {
+        record["id"]: fact for record, fact in unique_facts
     }
-    questions = []
-    seen_stems = set()
-    seen_option_sets = set()
-    distractor_usage = {}
-    rejected_questions = 0
-    distinct_concept_count = len(labels_by_key)
-    max_distractor_reuse = max(
-        3,
-        (num_questions * 3 + max(1, distinct_concept_count - 1) - 1)
-        // max(1, distinct_concept_count - 1) + 1
+    records_by_id = {record["id"]: record for record, _ in unique_facts}
+    question_records = [records_by_id[fact_id] for fact_id in candidate_ids]
+    distractor_records = [
+        record for record, _ in unique_facts if record["id"] not in candidate_ids
+    ]
+    report_progress(80, "Generating questions using built-in source-based logic.")
+    generated_questions = generate_question_items(
+        question_records,
+        num_questions,
+        distractor_records=distractor_records,
+        difficulty=difficulty,
     )
 
+    report_progress(94, "Checking question answers and source-derived choices.")
+    questions = []
     for item in generated_questions:
-        if not isinstance(item, dict):
-            rejected_questions += 1
-            continue
-        if "concept_tested" not in item and "answer" in item:
-            item = dict(item)
-            answer = str(item.get("answer", "")).casefold().strip()
-            item["concept_tested"] = labels_by_key.get(answer, item.get("answer"))
-            options = item.get("options")
-            if isinstance(options, list) and item["concept_tested"] in options:
-                item["correct_answer_index"] = next(
-                    index for index, option in enumerate(options)
-                    if str(option).casefold().strip() == answer
-                )
-            item.setdefault(
-                "explanation",
-                "The correct choice is supported by the cited source fact; "
-                "the other choices describe different concepts."
-            )
-        concept_key = str(item.get("concept_tested", "")).casefold().strip()
-        fact_entry = facts_by_topic.get(concept_key)
-        fact = fact_entry[1] if fact_entry else None
-        source_id = fact_entry[0]["id"] if fact_entry else None
+        fact = facts_by_id.get(item.get("source_fact_id"))
+        options = item.get("options")
+        answer = item.get("answer")
+        answer_index = item.get("correct_answer_index")
         if (
             fact is None
-            or source_id not in candidate_ids
-            or not isinstance(item.get("correct_answer_index"), int)
-            or isinstance(item.get("correct_answer_index"), bool)
-            or not 0 <= item["correct_answer_index"] < 4
+            or item.get("source_fact_id") not in candidate_ids
+            or not isinstance(options, list)
+            or len(options) != 4
+            or any(not isinstance(option, str) for option in options)
+            or len({option.casefold() for option in options}) != 4
+            or not isinstance(answer_index, int)
+            or isinstance(answer_index, bool)
+            or not 0 <= answer_index < len(options)
+            or not isinstance(answer, str)
+            or answer.casefold() != fact["topic"].casefold()
+            or options[answer_index].casefold() != fact["topic"].casefold()
+            or any(option.casefold() not in facts_by_topic for option in options)
+            or not isinstance(item.get("question"), str)
+            or not item["question"].strip()
             or not isinstance(item.get("explanation"), str)
             or not item["explanation"].strip()
         ):
-            rejected_questions += 1
-            continue
-        question = re.sub(r"\s+", " ", str(item.get("question", ""))).strip()
-        question_key = re.sub(r"\W+", " ", question).casefold().strip()
-        question_type = str(item.get("question_type", "application")).casefold()
-        options = item.get("options")
-        answer_index = item["correct_answer_index"]
-        if (
-            len(question) < 20
-            or len(question) > 280
-            or "?" not in question
-            or question_key in seen_stems
-            or question_type not in {
-                "function", "purpose", "relationship", "application",
-                "distinction", "process", "comparison"
-            }
-            or not isinstance(options, list)
-            or len(options) != 4
-        ):
-            rejected_questions += 1
             continue
 
-        canonical_options = []
-        valid_options = True
-        for option in options:
-            option_key = str(option).casefold().strip()
-            canonical = labels_by_key.get(option_key)
-            if canonical is None or len(canonical.split()) > 6:
-                valid_options = False
-                break
-            canonical_options.append(canonical)
-        if (
-            not valid_options
-            or len({option.casefold() for option in canonical_options}) != 4
-            or fact["topic"].casefold() not in {
-                option.casefold() for option in canonical_options
-            }
-            or canonical_options[answer_index].casefold() != fact["topic"].casefold()
-        ):
-            continue
-
-        option_set = frozenset(option.casefold() for option in canonical_options)
-        distractors = [
-            option for option in canonical_options
-            if option.casefold() != fact["topic"].casefold()
-        ]
-
-        option_explanations = {
-            option: facts_by_topic[option.casefold()][1]["text"]
-            for option in canonical_options
-        }
+        canonical_options = [facts_by_topic[option.casefold()]["topic"] for option in options]
         questions.append({
             "id": len(questions) + 1,
-            "question": question,
+            "question": item["question"],
             "options": canonical_options,
             "answer": fact["topic"],
             "source_text": fact["text"],
             "topic": fact["topic"],
-            "option_explanations": option_explanations,
-            "explanation": item["explanation"].strip(),
+            "option_explanations": {
+                option: facts_by_topic[option.casefold()]["text"]
+                for option in canonical_options
+            },
+            "explanation": item["explanation"],
             "concept_tested": fact["topic"],
             "correct_answer_index": canonical_options.index(fact["topic"]),
             "page": fact.get("page"),
             "unit": fact.get("unit"),
-            "unit_group": fact.get("unit_group")
+            "unit_group": fact.get("unit_group"),
         })
-        seen_stems.add(question_key)
-        seen_option_sets.add(option_set)
-        for distractor in distractors:
-            key = distractor.casefold()
-            distractor_usage[key] = distractor_usage.get(key, 0) + 1
         if len(questions) == num_questions:
             break
 
-    report_progress(
-        100,
-        f"Validated {len(questions)} source-grounded questions "
-        f"({rejected_questions} rejected)."
-    )
+    report_progress(100, f"Created {len(questions)} source-grounded questions.")
     if not questions:
         report_progress(
             100,
-            "The available source facts did not produce questions that passed the accuracy and "
-            "answer-choice checks. Try a broader topic or page selection, or choose another source."
+            "The available source facts could not produce valid four-choice questions. "
+            "Try a broader topic or page selection, or choose another source.",
         )
     return questions
 
@@ -1273,8 +921,8 @@ def generate_mcqs(
     text,
     num_questions=5,
     topic_filter=None,
-    question_guidance="",
-    progress_callback=None
+    progress_callback=None,
+    difficulty="Medium",
 ):
     def report_progress(value, message):
         if progress_callback:
@@ -1294,19 +942,12 @@ def generate_mcqs(
         report_progress(100, "No clear source-backed concepts were found in the selected material")
         return []
 
-    def content_words(sentence):
-        return {
-            word.casefold()
-            for word in re.findall(r"[A-Za-z][A-Za-z'-]*", sentence)
-            if len(word) >= 4 and word.casefold() not in QUESTION_STOP_WORDS
-        }
-
     def query_words(sentence):
         return {
             word.casefold()
             for word in re.findall(r"[A-Za-z0-9][A-Za-z0-9'-]*", sentence)
             if (len(word) >= 2 or word.isdigit())
-            and word.casefold() not in QUESTION_STOP_WORDS
+            and word.casefold() not in TOPIC_STOP_WORDS
         }
 
     fact_pool = facts
@@ -1334,20 +975,12 @@ def generate_mcqs(
         if topic_terms
         else f"Preparing {len(candidates)} facts from the selected material"
     )
-    guidance_words = content_words(question_guidance)
-    candidates = sorted(
-        candidates,
-        key=lambda fact: (
-            -len(guidance_words & content_words(fact["text"])),
-            random.random()
-        )
-    )
     return generate_mcqs_from_source(
         candidates,
         fact_pool,
         num_questions,
-        question_guidance,
-        report_progress
+        report_progress,
+        difficulty=difficulty,
     )
 
 def format_source_location(question):
@@ -1453,7 +1086,7 @@ def send_whatsapp_report(parent_phone, student_name, score_pct, improvement_summ
         f"📊 *Quiz Result Update for {student_name}*\n\n"
         f"• *Score:* {score_pct}%\n\n"
         f"💡 *Improvement Areas:*\n{improvement_summary}\n\n"
-        f"Lab AI Quiz System"
+        f"MCQ Quiz System"
     )
     
     headers = {
@@ -1732,7 +1365,18 @@ if firebase_config:
                 )
                 client = FirebaseClient(firebase_config, auth_event["idToken"])
                 if st.session_state.cloud_user is None:
-                    profile = client.get_document("users", authenticated_user["uid"])
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        profile_request = executor.submit(
+                            client.get_document,
+                            "users",
+                            authenticated_user["uid"],
+                        )
+                        admin_request = executor.submit(
+                            client.is_admin,
+                            authenticated_user["uid"],
+                        )
+                        profile = profile_request.result()
+                        is_admin = admin_request.result()
                     st.session_state.document_cache = (
                         profile.get("documentCache", {})
                         if isinstance(profile, dict)
@@ -1748,35 +1392,35 @@ if firebase_config:
                     }
                     if not profile:
                         profile_fields["createdAt"] = utc_timestamp()
-                    elif "email" in profile:
-                        client.delete_document_fields(
+                        client.create_document(
                             "users",
                             authenticated_user["uid"],
-                            ["email"],
+                            profile_fields,
                         )
-                    for attempt in client.list_user_attempts(
-                        authenticated_user["uid"]
-                    ):
-                        if "email" in attempt:
-                            client.delete_document_fields(
-                                "attempts",
-                                attempt["_id"],
-                                ["email"],
-                            )
-                    client.put_document(
-                        "users",
-                        authenticated_user["uid"],
-                        profile_fields,
-                    )
-                    st.session_state.is_admin = client.is_admin(
-                        authenticated_user["uid"]
-                    )
+                    else:
+                        client.put_document(
+                            "users",
+                            authenticated_user["uid"],
+                            profile_fields,
+                        )
+                    st.session_state.is_admin = is_admin
                 st.session_state.cloud_user = authenticated_user
                 st.session_state.firebase_id_token = auth_event["idToken"]
                 st.session_state.auth_error = None
                 st.rerun()
             except CloudBackendError as error:
-                st.session_state.auth_error = str(error)
+                message = str(error)
+                if (
+                    "HTTP 403" in message
+                    and "Missing or insufficient permissions" in message
+                ):
+                    message = (
+                        "Google sign-in succeeded, but Firestore denied a "
+                        "sign-in data request. Publish the current firestore.rules "
+                        "in Firebase Console → Firestore → Rules, then retry. "
+                        f"Details: {message}"
+                    )
+                st.session_state.auth_error = message
 
 if not firebase_config:
     st.title("Set up secure sign-in")
@@ -1784,7 +1428,7 @@ if not firebase_config:
     st.stop()
 
 if not st.session_state.cloud_user:
-    st.title("AI MCQ Quiz Lab")
+    st.title("MCQ Quiz Lab")
     st.subheader("Sign in with your Google account")
     st.write(
         "Sign in to save your quiz activity to your profile. "
@@ -1806,47 +1450,6 @@ with st.sidebar:
         f"**Signed in:** "
         f"{format_display_name(st.session_state.cloud_user.get('displayName'))}"
     )
-    if HOSTED_DEPLOYMENT:
-        st.caption("AI generation is managed by the app administrator.")
-    else:
-        with st.expander("OmniRoute AI settings", expanded=True):
-            st.caption(
-                "These settings apply only to this browser session. The API key "
-                "is not saved to Firebase or project files."
-            )
-            st.caption(
-                "For a hosted deployment, the app administrator configures the "
-                "gateway in Streamlit Secrets."
-            )
-            st.text_input(
-                "OmniRoute endpoint",
-                key="omniroute_endpoint",
-                help="OpenAI-compatible base URL, normally http://localhost:20128/v1.",
-            )
-            st.text_input(
-                "OmniRoute API key",
-                type="password",
-                key="omniroute_api_key",
-                help=(
-                    "Use the key from OmniRoute Dashboard > API Keys. This is "
-                    "different from a provider key."
-                ),
-            )
-            st.text_input(
-                "OmniRoute model",
-                key="omniroute_model",
-                help="Use auto for OmniRoute routing, or enter a specific model ID.",
-            )
-            if st.button("Test OmniRoute connection", use_container_width=True):
-                try:
-                    test_result = _omniroute_chat(
-                        [{"role": "user", "content": "Reply with OK only."}],
-                        temperature=0,
-                    )
-                    st.success("OmniRoute connection succeeded.")
-                    st.caption(f"Response received: {json.dumps(test_result)[:180]}")
-                except (requests.RequestException, RuntimeError, ValueError) as error:
-                    st.error(f"OmniRoute connection failed: {error}")
     if st.button("Refresh access", use_container_width=True):
         try:
             st.session_state.is_admin = cloud_client.is_admin(
@@ -2143,48 +1746,26 @@ if st.session_state.app_state == "upload":
                     max_value=15,
                     value=5
                 )
-                topic_column, guidance_column = st.columns(2, gap="small")
-                with topic_column:
-                    topic_unit = st.text_input(
-                        "Topic or unit (optional)",
-                        placeholder="e.g. RAM or Unit 2",
-                        help=(
-                            "Optional. Leave blank to use the whole selected document; "
-                            "enter a topic to narrow question targets."
-                        )
+                difficulty = st.selectbox(
+                    "Difficulty",
+                    ["Easy", "Medium", "Hard"],
+                    index=1,
+                    help=(
+                        "Controls how closely related the source-derived "
+                        "incorrect choices are to the correct concept."
+                    ),
+                )
+                topic_unit = st.text_input(
+                    "Topic or unit (optional)",
+                    placeholder="e.g. RAM or Unit 2",
+                    help=(
+                        "Optional. Leave blank to use the whole selected document; "
+                        "enter a topic to narrow question targets."
                     )
-                with guidance_column:
-                    st.selectbox(
-                        "Instruction template",
-                        [
-                            "Custom instructions",
-                            *QUESTION_PROMPT_TEMPLATES,
-                        ],
-                        key="question_prompt_template",
-                        on_change=apply_question_prompt_template,
-                        help=(
-                            "Choose a concise starting prompt, then edit it below "
-                            "to match your class or assessment."
-                        ),
-                    )
-                    question_guidance = st.text_area(
-                        "Question focus or instructions (optional)",
-                        placeholder=(
-                            "Add your own instructions or choose a template above."
-                        ),
-                        max_chars=500,
-                        height=95,
-                        key="question_guidance",
-                        help=(
-                            "Templates are starting points and remain fully editable. "
-                            "Your instructions guide the AI for every generated question."
-                        ),
-                    )
+                )
                 st.info(
-                    "**AI-powered, source-grounded questions.** OmniRoute analyzes "
-                    "your selected material and instructions to craft clear, "
-                    "concept-focused MCQs with plausible choices. Every answer is "
-                    "checked against the source before it reaches the quiz."
+                    "Questions and answer choices are generated locally from "
+                    "source facts using the built-in question logic."
                 )
 
             page_ranges = st.text_input(
@@ -2346,8 +1927,7 @@ if st.session_state.app_state == "upload":
                         f"Imported {len(questions)} questions with their original answer choices."
                     )
                 else:
-                    search_query = topic_unit.strip() or question_guidance.strip()
-                    instruction_search = not bool(topic_unit.strip())
+                    search_query = topic_unit.strip()
                     is_pdf = Path(selected_file_name).suffix.lower() == ".pdf"
                     if (
                         is_pdf
@@ -2366,14 +1946,12 @@ if st.session_state.app_state == "upload":
                                 library_stat.st_mtime_ns,
                                 library_stat.st_size,
                                 search_query,
-                                instruction_search,
                                 _progress_callback=update_generation_progress
                             )
                         else:
                             matched_pages, page_count = locate_pdf_pages(
                                 selected_file_bytes,
                                 search_query,
-                                instruction_search,
                                 _progress_callback=update_generation_progress
                             )
                         if not matched_pages:
@@ -2475,8 +2053,8 @@ if st.session_state.app_state == "upload":
                         source_lines,
                         num_questions=num_q,
                         topic_filter=topic_unit.strip(),
-                        question_guidance=question_guidance,
-                        progress_callback=update_generation_progress
+                        progress_callback=update_generation_progress,
+                        difficulty=difficulty,
                     )
             except ValueError as e:
                 status_slot.error(str(e))
@@ -2668,16 +2246,6 @@ elif st.session_state.app_state == "quiz":
                                 )
                             })
 
-                    summary_ai_error = None
-                    if wrong_list and st.session_state.question_source == "generated":
-                        try:
-                            ai_reviews = improve_omniroute_result_reasons(wrong_list)
-                            for item, review in zip(wrong_list, ai_reviews):
-                                item["correct_reason"] = review["correct_reason"].strip()
-                                item["incorrect_reason"] = review["incorrect_reason"].strip()
-                        except (requests.RequestException, RuntimeError, ValueError) as error:
-                            summary_ai_error = str(error)
-
                     score_pct = int((correct_count / len(questions)) * 100)
 
                     if score_pct == 100:
@@ -2701,7 +2269,6 @@ elif st.session_state.app_state == "quiz":
                         "total": len(questions),
                         "wrong_answers": wrong_list,
                         "improvement_plan": plan,
-                        "summary_ai_error": summary_ai_error,
                     }
                     st.session_state.app_state = "results"
                     st.rerun()
@@ -2733,12 +2300,6 @@ elif st.session_state.app_state == "results":
 
         st.markdown("### 💡 Improvement Summary & Plan")
         st.info(data["improvement_plan"])
-        if data.get("summary_ai_error"):
-            st.warning(
-                "OmniRoute could not improve the result explanations, so the "
-                "source-grounded explanations are being shown instead: "
-                f"{data['summary_ai_error']}"
-            )
 
         if data["wrong_answers"]:
             st.markdown("### 🔍 Incorrect Responses Review")

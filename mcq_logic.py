@@ -32,14 +32,6 @@ _ACTION_PATTERNS = (
      "is responsible for"),
 )
 
-_QUESTION_TEMPLATES = (
-    "Which concept is described as “{definition}”?",
-    "According to the source, which concept matches this description: “{definition}”?",
-    "The material describes one concept as “{definition}”. Which term is it?",
-    "What term in the material corresponds to this description: “{definition}”?",
-)
-
-
 def _normalize_token(token):
     token = token.casefold()
     if len(token) > 5 and token.endswith("ies"):
@@ -86,46 +78,29 @@ def _cosine_similarity(left, right, inverse_frequency):
     return dot_product / (left_norm * right_norm)
 
 
-def _guidance_style(guidance):
-    guidance = str(guidance or "").casefold()
-    if re.search(r"\b(compare|comparison|contrast|difference|distinguish)\b", guidance):
-        return "comparison"
-    if re.search(r"\b(application|scenario|situation|case study|real[- ]world)\b", guidance):
-        return "application"
-    if re.search(r"\b(purpose|function|role|use|used|responsib|how does)\b", guidance):
-        return "function"
-    return "identification"
-
-
-def _question_for(record, index, guidance=""):
+def _question_for(record, rng):
     definition = re.sub(r"\s+", " ", record["definition"]).strip().rstrip(".!?")
-    style = _guidance_style(guidance)
-    if style == "comparison":
-        return (
-            "Which concept is the best match when distinguishing the following "
-            f"characteristic from related concepts: {definition}?"
-        )
-    if style == "application":
-        return (
-            "A student needs a concept that can provide this capability: "
-            f"{definition}. Which concept should the student choose?"
-        )
-    if style == "function":
-        return (
-            "A computer system needs to satisfy this requirement: "
-            f"{definition}. Which concept provides it?"
-        )
     for pattern, fixed_verb in _ACTION_PATTERNS:
         match = pattern.search(definition)
         if not match:
             continue
         if fixed_verb:
             action = f"{fixed_verb} {match.group(1).rstrip('.!?')}"
+            return rng.choice((
+                f"Which concept {action}?",
+                f"What concept {action}?",
+            ))
         else:
             verb, rest = match.groups()
             action = f"{verb.casefold()} {rest.rstrip('.!?')}"
-        return f"Which concept is associated with this capability: {action}?"
-    return f"Which concept should a student select for this requirement: {definition}?"
+            return rng.choice((
+                f"Which concept {action}?",
+                f"What concept {action}?",
+            ))
+    return rng.choice((
+        f"Which concept matches this description: {definition}?",
+        f"What concept is described by: {definition}?",
+    ))
 
 
 def generate_question_items(
@@ -133,10 +108,13 @@ def generate_question_items(
     num_questions,
     distractor_records=None,
     rng=None,
-    question_guidance="",
+    difficulty="Medium",
 ):
     """Build source-grounded questions with related, document-derived distractors."""
     rng = rng or random
+    difficulty = str(difficulty).casefold()
+    if difficulty not in {"easy", "medium", "hard"}:
+        raise ValueError("difficulty must be Easy, Medium, or Hard")
     target_records = [
         record for record in records
         if isinstance(record.get("id"), str)
@@ -173,6 +151,10 @@ def generate_question_items(
         record["id"]: _tokens(
             f"{record['concept']} {record['definition']}"
         )
+        for record in usable_records
+    }
+    definition_token_sets = {
+        record["id"]: _tokens(record["definition"])
         for record in usable_records
     }
     document_frequency = {}
@@ -221,15 +203,37 @@ def generate_question_items(
             label_overlap = bool(
                 _tokens(target["concept"]) & _tokens(alternative["concept"])
             )
+            definition_tokens = definition_token_sets[alternative["id"]]
+            target_definition_tokens = definition_token_sets[target["id"]]
+            shared_definition_tokens = (
+                definition_tokens & target_definition_tokens
+            )
+            definition_union = definition_tokens | target_definition_tokens
+            definition_overlap = (
+                len(shared_definition_tokens) / len(definition_union)
+                if definition_union else 0.0
+            )
+            if definition_overlap >= 0.9:
+                continue
             score = similarity + (0.12 if same_unit else 0.0)
             score += 0.08 if label_overlap else 0.0
             if similarity > 0.88:
                 score -= (similarity - 0.88) * 2
+            if difficulty == "easy":
+                score = similarity - (0.12 if same_unit else 0.0)
+            elif difficulty == "hard":
+                score = similarity + (0.12 if same_unit else 0.0)
+                score += 0.08 if label_overlap else 0.0
             ranked_distractors.append(
                 (score, alternative["concept"].casefold(), alternative)
             )
 
-        ranked_distractors.sort(key=lambda item: (-item[0], item[1]))
+        ranked_distractors.sort(
+            key=lambda item: (
+                item[0] if difficulty == "easy" else -item[0],
+                item[1],
+            )
+        )
         available = [
             item[2] for item in ranked_distractors
             if distractor_usage.get(item[2]["concept"].casefold(), 0) < max_reuse
@@ -246,24 +250,12 @@ def generate_question_items(
         question_type = (
             "function"
             if any(pattern.search(definition) for pattern, _ in _ACTION_PATTERNS)
-            else "distinction"
+            else "definition"
         )
         questions.append({
             "source_fact_id": target["id"],
-            "question": _question_for(
-                target,
-                len(questions),
-                guidance=question_guidance,
-            ),
-            "question_type": (
-                "comparison"
-                if _guidance_style(question_guidance) == "comparison"
-                else (
-                    "application"
-                    if _guidance_style(question_guidance) == "application"
-                    else question_type
-                )
-            ),
+            "question": _question_for(target, rng),
+            "question_type": question_type,
             "options": options,
             "answer": target["concept"],
             "concept_tested": target["concept"],

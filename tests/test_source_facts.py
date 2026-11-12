@@ -42,13 +42,8 @@ class SourceFactExtractionTests(unittest.TestCase):
             {
                 "text": (
                     "For example, the computer may use RAM and ROM in several "
-                    "different ways during a task."
-                ),
-            },
-            {
-                "text": (
-                    "ROM is non-volatile memory that stores startup instructions "
-                    "needed by a computer."
+                    "different ways during a task. ROM is non-volatile memory "
+                    "that stores startup instructions needed by a computer."
                 ),
             },
         ]

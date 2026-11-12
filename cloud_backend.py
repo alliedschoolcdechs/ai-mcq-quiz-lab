@@ -238,6 +238,26 @@ class FirebaseClient:
                 )
         return self._document_fields(document)
 
+    def create_document(self, collection, document_id, fields):
+        payload = {
+            "fields": {
+                key: _encode_value(value)
+                for key, value in fields.items()
+            }
+        }
+        try:
+            document = self._request(
+                "POST",
+                f"{self.documents_url}/{quote(collection, safe='')}",
+                params={"documentId": document_id},
+                payload=payload,
+            )
+        except CloudBackendError as error:
+            if "HTTP 409" not in str(error):
+                raise
+            return self.put_document(collection, document_id, fields)
+        return self._document_fields(document)
+
     def delete_document(self, collection, document_id):
         url = (
             f"{self.documents_url}/{quote(collection, safe='')}/"
