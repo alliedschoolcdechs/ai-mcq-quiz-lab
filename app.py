@@ -3,29 +3,33 @@ import io
 import html
 import hashlib
 import difflib
-import json
 import re
 import shutil
+import sqlite3
 import sys
 import uuid
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 import pandas as pd
 import streamlit as st
-import streamlit.components.v1 as components
-from streamlit.errors import StreamlitSecretNotFoundError
 from fpdf import FPDF
 import requests
-from cloud_backend import (
-    CloudBackendError,
-    FirebaseClient,
-    format_display_name,
-    load_firebase_config,
-    verify_firebase_id_token,
+from mcq_source import (
+    mcq_lines_from_table,
+    parse_mcq_source,
+    select_answered_mcqs,
 )
-from mcq_import import parse_imported_mcqs
-from mcq_logic import generate_question_items
+from mcq_logic import (
+    QUESTION_STYLES,
+    generate_question_items,
+    generate_short_answer_items,
+    resolve_generation_preferences,
+)
+from library_storage import (
+    DuplicateLibraryFileError,
+    add_library_file,
+)
+from local_storage import LocalStorage
 from source_facts import definition_fragment, extract_exam_facts
 
 # Document parsing libraries
@@ -39,6 +43,8 @@ APP_DIR = (
 )
 LIBRARY_DIR = APP_DIR / "library"
 LIBRARY_DIR.mkdir(exist_ok=True)
+DATABASE_PATH = APP_DIR / "quiz_attempts.sqlite3"
+LOCAL_STORAGE = LocalStorage(DATABASE_PATH)
 SUPPORTED_FILE_TYPES = {".pdf", ".docx", ".xlsx", ".csv", ".txt"}
 
 # Page Config
@@ -46,7 +52,7 @@ st.set_page_config(
     page_title="MCQ Generator & Quiz Lab",
     page_icon="🎓",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
 # Custom CSS for a dark theme and animated quiz questions
@@ -74,8 +80,16 @@ st.markdown("""
     [data-testid="stMain"] > div {
         padding-top: 3rem;
     }
-    [data-testid="stSidebar"] {
-        background-color: #111a2b;
+    [data-testid="stSidebar"],
+    [data-testid="collapsedControl"] {
+        display: none !important;
+    }
+    [class*="st-key-top_navigation"] [data-testid="stHorizontalBlock"] {
+        align-items: center;
+        gap: 0.6rem;
+    }
+    [class*="st-key-top_navigation"] button {
+        min-height: 2.4rem;
     }
     [class*="st-key-upload_panel"] {
         padding: 0.65rem 0.75rem;
@@ -281,26 +295,20 @@ if "score_data" not in st.session_state:
     st.session_state.score_data = {}
 if "generation_notice" not in st.session_state:
     st.session_state.generation_notice = None
-if "pending_import" not in st.session_state:
-    st.session_state.pending_import = None
 if "quiz_mode" not in st.session_state:
     st.session_state.quiz_mode = "Examination"
 if "question_source" not in st.session_state:
     st.session_state.question_source = "generated"
-if "cloud_user" not in st.session_state:
-    st.session_state.cloud_user = None
-if "firebase_id_token" not in st.session_state:
-    st.session_state.firebase_id_token = None
-if "logout_nonce" not in st.session_state:
-    st.session_state.logout_nonce = 0
-if "auth_error" not in st.session_state:
-    st.session_state.auth_error = None
+if "short_answer_questions" not in st.session_state:
+    st.session_state.short_answer_questions = []
 if "page_view" not in st.session_state:
     st.session_state.page_view = "home"
+if "admin_authenticated" not in st.session_state:
+    st.session_state.admin_authenticated = False
 if "attempt_saved" not in st.session_state:
     st.session_state.attempt_saved = False
 if "document_cache" not in st.session_state:
-    st.session_state.document_cache = {}
+    st.session_state.document_cache = LOCAL_STORAGE.load_document_cache()
 # ==========================================
 # DOCUMENT TEXT EXTRACTOR
 # ==========================================
@@ -592,25 +600,22 @@ def compact_document_facts(source_lines):
     return compact
 
 
-def save_document_fact_cache(client, file_name, modified_ns, file_size, source_lines):
+def save_document_fact_cache(file_name, modified_ns, file_size, source_lines):
     cache_key = document_cache_key(file_name, modified_ns, file_size)
     cached_facts = compact_document_facts(source_lines)
     if not cached_facts:
         return
     document_cache = dict(st.session_state.document_cache or {})
-    document_cache[cache_key] = {
+    cache_entry = {
         "fileName": Path(file_name).name,
         "modifiedNs": modified_ns,
         "fileSize": file_size,
         "facts": cached_facts,
     }
+    LOCAL_STORAGE.save_document_cache_entry(cache_key, cache_entry)
+    document_cache[cache_key] = cache_entry
     if len(document_cache) > 10:
         document_cache = dict(list(document_cache.items())[-10:])
-    client.put_document(
-        "users",
-        st.session_state.cloud_user["uid"],
-        {"documentCache": document_cache},
-    )
     st.session_state.document_cache = document_cache
 
 
@@ -646,7 +651,10 @@ def extract_mcq_lines(
                     file_bytes,
                     scale=2
                 )
-            lines.extend(page_text.splitlines())
+            lines.extend(
+                {"text": line, "page": page_number}
+                for line in page_text.splitlines()
+            )
             if progress_callback:
                 progress = 5 + int(50 * (page_index + 1) / max(1, len(pages_to_read)))
                 progress_page_limit = (
@@ -664,14 +672,32 @@ def extract_mcq_lines(
     if extension in {".docx", ".doc"}:
         document = Document(io.BytesIO(file_bytes))
         lines = [
-            paragraph.text
+            {"text": paragraph.text, "page": None}
             for paragraph in document.paragraphs
             if paragraph.text.strip()
         ]
         for table in document.tables:
+            table_rows = [
+                [cell.text for cell in row.cells]
+                for row in table.rows
+            ]
+            table_mcqs = (
+                mcq_lines_from_table(table_rows[0], table_rows[1:])
+                if table_rows
+                else []
+            )
+            if table_mcqs:
+                lines.extend(
+                    {"text": line, "page": None}
+                    for line in table_mcqs
+                )
+                continue
             for row in table.rows:
                 for cell in row.cells:
-                    lines.extend(cell.text.splitlines())
+                    lines.extend(
+                        {"text": line, "page": None}
+                        for line in cell.text.splitlines()
+                    )
         if progress_callback:
             progress_callback(55, "Read question text from the Word document.")
         return lines
@@ -679,30 +705,76 @@ def extract_mcq_lines(
     if extension == ".txt":
         if progress_callback:
             progress_callback(55, "Read question text from the text document.")
-        return file_bytes.decode("utf-8-sig", errors="replace").splitlines()
+        return [
+            {"text": line, "page": None}
+            for line in file_bytes.decode("utf-8-sig", errors="replace").splitlines()
+        ]
 
     if extension in {".csv", ".xlsx"}:
-        source_lines = read_document_text(
+        if extension == ".csv":
+            table = pd.read_csv(io.BytesIO(file_bytes))
+            table_mcqs = mcq_lines_from_table(
+                table.columns,
+                table.itertuples(index=False, name=None),
+            )
+            if table_mcqs:
+                if progress_callback:
+                    progress_callback(55, "Read question-bank rows from the CSV file.")
+                return [{"text": line, "page": None} for line in table_mcqs]
+        else:
+            sheets = pd.read_excel(io.BytesIO(file_bytes), sheet_name=None)
+            lines = []
+            found_table_mcqs = False
+            for sheet_name, table in sheets.items():
+                table_mcqs = mcq_lines_from_table(
+                    table.columns,
+                    table.itertuples(index=False, name=None),
+                )
+                if table_mcqs:
+                    found_table_mcqs = True
+                    lines.extend(
+                        {"text": line, "page": None}
+                        for line in table_mcqs
+                    )
+                else:
+                    lines.append({"text": f"Sheet: {sheet_name}", "page": None})
+                    lines.extend(
+                        {"text": line, "page": None}
+                        for line in table.to_string(index=False).splitlines()
+                    )
+            if found_table_mcqs:
+                if progress_callback:
+                    progress_callback(55, "Read question-bank rows from the workbook.")
+                return lines
+
+        return read_document_text(
             file_bytes,
             file_name,
             progress_callback=progress_callback,
             progress_start=5
         )
-        return [line["text"] for line in source_lines]
 
-    raise ValueError("Import existing MCQs supports PDF, DOCX, XLSX, CSV, and TXT files.")
+    raise ValueError("MCQ source detection supports PDF, DOCX, XLSX, CSV, and TXT files.")
 
 
-def start_quiz(questions, student_name, file_name, quiz_mode, question_source):
+def start_quiz(
+    questions,
+    student_name,
+    student_class,
+    file_name,
+    question_source,
+    short_answer_questions,
+):
     st.session_state.questions = questions
     st.session_state.student_name = student_name.strip()
+    st.session_state.student_class = student_class.strip()
     st.session_state.file_name = file_name
     st.session_state.current_index = 0
     st.session_state.user_answers = {}
-    st.session_state.quiz_mode = quiz_mode
+    st.session_state.quiz_mode = "Examination"
     st.session_state.question_source = question_source
     st.session_state.generation_notice = None
-    st.session_state.pending_import = None
+    st.session_state.short_answer_questions = short_answer_questions
     st.session_state.quiz_attempt_id = uuid.uuid4().hex
     st.session_state.quiz_started_at = datetime.now(timezone.utc).isoformat()
     st.session_state.attempt_saved = False
@@ -807,6 +879,7 @@ def generate_mcqs_from_source(
     num_questions,
     report_progress,
     difficulty="Medium",
+    question_style="Balanced",
 ):
     unique_facts = []
     facts_by_topic = {}
@@ -855,6 +928,7 @@ def generate_mcqs_from_source(
         num_questions,
         distractor_records=distractor_records,
         difficulty=difficulty,
+        question_style=question_style,
     )
 
     report_progress(94, "Checking question answers and source-derived choices.")
@@ -923,6 +997,7 @@ def generate_mcqs(
     topic_filter=None,
     progress_callback=None,
     difficulty="Medium",
+    question_style="Balanced",
 ):
     def report_progress(value, message):
         if progress_callback:
@@ -981,6 +1056,7 @@ def generate_mcqs(
         num_questions,
         report_progress,
         difficulty=difficulty,
+        question_style=question_style,
     )
 
 def format_source_location(question):
@@ -1115,7 +1191,6 @@ def utc_timestamp():
 
 
 def build_attempt_record():
-    user = st.session_state.cloud_user
     score = st.session_state.score_data
     started_at = st.session_state.quiz_started_at
     completed_at = utc_timestamp()
@@ -1144,9 +1219,8 @@ def build_attempt_record():
 
     return {
         "attemptId": st.session_state.quiz_attempt_id,
-        "uid": user["uid"],
-        "displayName": format_display_name(user.get("displayName")),
-        "studentName": format_display_name(st.session_state.student_name),
+        "studentName": st.session_state.student_name,
+        "studentClass": st.session_state.student_class,
         "fileName": st.session_state.file_name,
         "quizMode": st.session_state.quiz_mode,
         "questionSource": st.session_state.question_source,
@@ -1161,21 +1235,11 @@ def build_attempt_record():
     }
 
 
-def save_completed_attempt(client):
+def save_completed_attempt():
     if st.session_state.attempt_saved:
         return
     attempt = build_attempt_record()
-    client.save_attempt(attempt)
-    client.put_document(
-        "users",
-        st.session_state.cloud_user["uid"],
-        {
-            "lastAttemptAt": attempt["completedAt"],
-            "lastAttemptId": attempt["attemptId"],
-            "lastScorePct": attempt["scorePct"],
-            "lastAttemptGraded": attempt["graded"],
-        },
-    )
+    LOCAL_STORAGE.save_attempt(attempt)
     st.session_state.attempt_saved = True
 
 
@@ -1190,7 +1254,7 @@ def format_attempt_time(value):
         return str(value)
 
 
-def render_attempt_history(attempts, show_student=True):
+def render_attempt_history(attempts):
     if not attempts:
         st.info("No quiz activity has been recorded yet.")
         return
@@ -1217,16 +1281,17 @@ def render_attempt_history(attempts, show_student=True):
                 else "—"
             ),
             "Duration (seconds)": attempt.get("durationSeconds", 0),
+            "Student": attempt.get("studentName", ""),
+            "Class": attempt.get("studentClass", ""),
         }
-        if show_student:
-            row["Student"] = format_display_name(attempt.get("displayName"))
         rows.append(row)
     st.dataframe(pd.DataFrame(rows), use_container_width=True)
 
     for attempt in attempts[:100]:
         title = (
             f"{format_attempt_time(attempt.get('completedAt'))} · "
-            f"{format_display_name(attempt.get('displayName'))} · "
+            f"{attempt.get('studentName', 'Student')} · "
+            f"{attempt.get('studentClass', '')} · "
             f"{attempt.get('fileName', 'Quiz')}"
         )
         with st.expander(title):
@@ -1256,250 +1321,107 @@ def render_attempt_history(attempts, show_student=True):
                 )
 
 
-def remove_cloud_email_fields(client):
-    collections = ("users", "attempts", "adminMembers")
-    documents_by_collection = {}
-    for collection in collections:
-        documents, capped = client.list_documents(collection)
-        if capped:
-            raise CloudBackendError(
-                f"The {collection} collection exceeds the cleanup safety limit. "
-                "No records were changed."
-            )
-        documents_by_collection[collection] = documents
-
-    removed_counts = {}
-    for collection, documents in documents_by_collection.items():
-        removed = 0
-        for document in documents:
-            if "email" not in document:
-                continue
-            document_id = document.get("_id")
-            if not isinstance(document_id, str) or not document_id:
-                raise CloudBackendError(
-                    f"Could not identify a document in {collection} for cleanup."
-                )
-            client.delete_document_fields(collection, document_id, ["email"])
-            removed += 1
-        removed_counts[collection] = removed
-    return removed_counts
-
-
 # ==========================================
 # STREAMLIT UI ROUTING
 # ==========================================
-FIREBASE_CONFIG_PATH = APP_DIR / "firebase_config.json"
-try:
-    if FIREBASE_CONFIG_PATH.is_file():
-        firebase_config = load_firebase_config(FIREBASE_CONFIG_PATH)
-    else:
-        firebase_config = load_firebase_config(st.secrets["firebase"])
-    firebase_config_error = None
-except StreamlitSecretNotFoundError:
-    firebase_config = None
-    firebase_config_error = (
-        "Firebase configuration was not found. For Streamlit Community Cloud, "
-        "add the [firebase] settings from the README to the app's Secrets."
-    )
-except KeyError:
-    firebase_config = None
-    firebase_config_error = (
-        "Firebase settings are missing. Add a [firebase] section to the "
-        "Streamlit Community Cloud app's Secrets."
-    )
-except CloudBackendError as error:
-    firebase_config = None
-    firebase_config_error = str(error)
-
-if firebase_config:
-    firebase_component_path = Path(
-        getattr(sys, "_MEIPASS", Path(__file__).resolve().parent)
-    ) / "google_login_component"
-    google_login = components.declare_component(
-        "google_firebase_login",
-        path=str(firebase_component_path),
-    )
-    auth_event = google_login(
-        firebaseConfig={
-            "apiKey": firebase_config.api_key,
-            "authDomain": firebase_config.auth_domain,
-            "projectId": firebase_config.project_id,
-            "appId": firebase_config.app_id,
-        },
-        authenticated=st.session_state.cloud_user is not None,
-        displayName=(
-            format_display_name(
-                st.session_state.cloud_user.get("displayName")
-            )
-            if st.session_state.cloud_user
-            else ""
-        ),
-        logoutNonce=st.session_state.logout_nonce,
-        default=None,
-        key="google_firebase_login",
-    )
-
-    if isinstance(auth_event, dict):
-        event_nonce = auth_event.get("nonce")
-        if (
-            auth_event.get("event") == "signed_out"
-            and event_nonce == st.session_state.logout_nonce
-            and st.session_state.cloud_user is not None
-        ):
-            st.session_state.cloud_user = None
-            st.session_state.firebase_id_token = None
-            st.session_state.is_admin = False
-            st.session_state.document_cache = {}
-            st.session_state.page_view = "home"
-            st.rerun()
-        elif (
-            auth_event.get("event") in {"signed_in", "token_refreshed"}
-            and event_nonce == st.session_state.logout_nonce
-            and auth_event.get("idToken")
-            and auth_event["idToken"] != st.session_state.firebase_id_token
-        ):
-            try:
-                authenticated_user = verify_firebase_id_token(
-                    firebase_config,
-                    auth_event["idToken"],
-                )
-                client = FirebaseClient(firebase_config, auth_event["idToken"])
-                if st.session_state.cloud_user is None:
-                    with ThreadPoolExecutor(max_workers=2) as executor:
-                        profile_request = executor.submit(
-                            client.get_document,
-                            "users",
-                            authenticated_user["uid"],
-                        )
-                        admin_request = executor.submit(
-                            client.is_admin,
-                            authenticated_user["uid"],
-                        )
-                        profile = profile_request.result()
-                        is_admin = admin_request.result()
-                    st.session_state.document_cache = (
-                        profile.get("documentCache", {})
-                        if isinstance(profile, dict)
-                        else {}
-                    )
-                    profile_fields = {
-                        "uid": authenticated_user["uid"],
-                        "displayName": format_display_name(
-                            authenticated_user.get("displayName")
-                        ),
-                        "photoUrl": authenticated_user["photoUrl"],
-                        "lastLoginAt": utc_timestamp(),
-                    }
-                    if not profile:
-                        profile_fields["createdAt"] = utc_timestamp()
-                        client.create_document(
-                            "users",
-                            authenticated_user["uid"],
-                            profile_fields,
-                        )
-                    else:
-                        client.put_document(
-                            "users",
-                            authenticated_user["uid"],
-                            profile_fields,
-                        )
-                    st.session_state.is_admin = is_admin
-                st.session_state.cloud_user = authenticated_user
-                st.session_state.firebase_id_token = auth_event["idToken"]
-                st.session_state.auth_error = None
-                st.rerun()
-            except CloudBackendError as error:
-                message = str(error)
-                if (
-                    "HTTP 403" in message
-                    and "Missing or insufficient permissions" in message
-                ):
-                    message = (
-                        "Google sign-in succeeded, but Firestore denied a "
-                        "sign-in data request. Publish the current firestore.rules "
-                        "in Firebase Console → Firestore → Rules, then retry. "
-                        f"Details: {message}"
-                    )
-                st.session_state.auth_error = message
-
-if not firebase_config:
-    st.title("Set up secure sign-in")
-    st.error(firebase_config_error)
-    st.stop()
-
-if not st.session_state.cloud_user:
-    st.title("MCQ Quiz Lab")
-    st.subheader("Sign in with your Google account")
-    st.write(
-        "Sign in to save your quiz activity to your profile. "
-        "Your scores and attempt history are visible to administrators."
-    )
-    if firebase_config_error:
-        st.error(firebase_config_error)
-    elif st.session_state.auth_error:
-        st.error(st.session_state.auth_error)
-    st.stop()
-
-cloud_client = FirebaseClient(
-    firebase_config,
-    st.session_state.firebase_id_token,
-)
-
-with st.sidebar:
-    st.markdown(
-        f"**Signed in:** "
-        f"{format_display_name(st.session_state.cloud_user.get('displayName'))}"
-    )
-    if st.button("Refresh access", use_container_width=True):
-        try:
-            st.session_state.is_admin = cloud_client.is_admin(
-                st.session_state.cloud_user["uid"]
-            )
-            st.rerun()
-        except CloudBackendError as error:
-            st.error(f"Could not refresh account access: {error}")
-    if st.button("My activity", use_container_width=True):
-        st.session_state.page_view = "profile"
-        st.rerun()
-    if st.session_state.is_admin and st.button(
-        "Admin dashboard",
-        use_container_width=True,
-    ):
-        st.session_state.page_view = "admin"
-        st.rerun()
-    if st.button("Home", use_container_width=True):
+with st.container(key="top_navigation"):
+    home_column, admin_column, _ = st.columns([1, 1.2, 6], gap="small")
+    if home_column.button("Home", use_container_width=True):
         st.session_state.page_view = "home"
         st.rerun()
+    if st.session_state.admin_authenticated:
+        if admin_column.button("Admin dashboard", use_container_width=True):
+            st.session_state.page_view = "admin"
+            st.rerun()
+    elif admin_column.button("Staff sign-in", use_container_width=True):
+        st.session_state.page_view = "admin_login"
+        st.rerun()
 
-if st.session_state.page_view == "profile":
-    st.title("My profile and quiz activity")
-    st.write(f"**{format_display_name(st.session_state.cloud_user.get('displayName'))}**")
+if st.session_state.page_view == "admin_login":
     try:
-        user_attempts = cloud_client.list_user_attempts(
-            st.session_state.cloud_user["uid"]
-        )
-        render_attempt_history(user_attempts, show_student=False)
-    except CloudBackendError as error:
-        st.error(f"Could not load your quiz activity: {error}")
-    st.stop()
-
-if st.session_state.page_view == "admin":
-    if not st.session_state.is_admin:
-        st.error("Your account is not a member of the admin group.")
-        st.session_state.page_view = "home"
+        admin_setup_required = not LOCAL_STORAGE.has_admin_password()
+    except sqlite3.Error as error:
+        st.title("Admin access")
+        st.error(f"Could not read the local admin configuration: {error}")
         st.stop()
 
+    st.title("Set up admin" if admin_setup_required else "Admin sign-in")
+    if admin_setup_required:
+        st.caption(
+            "Create the first admin password on this computer before sharing "
+            "the app on a school network."
+        )
+    with st.form("admin_access", clear_on_submit=True):
+        entered_password = st.text_input(
+            "Create admin password" if admin_setup_required else "Admin password",
+            type="password",
+        )
+        confirm_password = None
+        if admin_setup_required:
+            confirm_password = st.text_input(
+                "Confirm admin password",
+                type="password",
+            )
+        submitted = st.form_submit_button(
+            "Create admin password" if admin_setup_required else "Unlock dashboard"
+        )
+
+    if submitted:
+        if admin_setup_required:
+            if len(entered_password) < 12:
+                st.error("Choose a password with at least 12 characters.")
+            elif entered_password != confirm_password:
+                st.error("The passwords do not match.")
+            else:
+                try:
+                    configured = LOCAL_STORAGE.configure_admin_password(
+                        entered_password
+                    )
+                except sqlite3.Error as error:
+                    st.error(f"Could not save the admin configuration: {error}")
+                else:
+                    if configured:
+                        st.session_state.admin_authenticated = True
+                        st.session_state.page_view = "admin"
+                        st.rerun()
+                    else:
+                        st.error(
+                            "An admin password was configured in another session. "
+                            "Sign in with that password."
+                        )
+        else:
+            try:
+                authenticated = LOCAL_STORAGE.verify_admin_password(
+                    entered_password
+                )
+            except sqlite3.Error as error:
+                st.error(f"Could not verify the admin password: {error}")
+            else:
+                if authenticated:
+                    st.session_state.admin_authenticated = True
+                    st.session_state.page_view = "admin"
+                    st.rerun()
+                else:
+                    st.error("Incorrect admin password.")
+    st.stop()
+
+if (
+    st.session_state.page_view == "admin"
+    and not st.session_state.admin_authenticated
+):
+    st.session_state.page_view = "admin_login"
+    st.rerun()
+
+if st.session_state.page_view == "admin":
     st.title("Admin dashboard")
     st.caption(
-        "Quiz activity is linked to each authenticated Google account. "
+        "Saved records are stored in the local SQLite database. "
         "Times are shown in this computer's local timezone."
     )
     try:
-        admin_users, users_capped = cloud_client.list_documents("users")
-        admin_attempts, attempts_capped = cloud_client.list_documents("attempts")
-        admin_members, members_capped = cloud_client.list_documents("adminMembers")
-    except CloudBackendError as error:
-        st.error(f"Could not load the admin dashboard: {error}")
+        admin_attempts = LOCAL_STORAGE.list_attempts()
+    except sqlite3.Error as error:
+        st.error(f"Could not load local quiz records: {error}")
         st.stop()
 
     graded_attempts = [
@@ -1513,131 +1435,26 @@ if st.session_state.page_view == "admin":
         else 0
     )
     metric_columns = st.columns(3)
-    metric_columns[0].metric("Registered students", len(admin_users))
+    metric_columns[0].metric(
+        "Students",
+        len({attempt.get("studentName", "") for attempt in admin_attempts}),
+    )
     metric_columns[1].metric("Quiz attempts", len(admin_attempts))
     metric_columns[2].metric(
         "Average graded score",
         f"{average_score:.1f}%" if graded_attempts else "—",
     )
-    if users_capped or attempts_capped or members_capped:
-        st.warning(
-            "The dashboard reached its 10,000-record safety limit. "
-            "Some older records may not be shown."
-        )
-    with st.expander("Email privacy cleanup"):
-        st.caption(
-            "Remove legacy email fields from existing Firestore profile, quiz, "
-            "and admin-group records. New app records no longer include emails."
-        )
-        if st.button("Remove stored email fields from cloud records"):
-            try:
-                removed_counts = remove_cloud_email_fields(cloud_client)
-                total_removed = sum(removed_counts.values())
-                st.success(
-                    f"Removed email fields from {total_removed} cloud records."
-                )
-            except CloudBackendError as error:
-                st.error(f"Could not complete email privacy cleanup: {error}")
-
-    activity_tab, students_tab, admins_tab = st.tabs(
-        ["Attempt activity", "Student profiles", "Admin group"]
+    student_filter = st.text_input("Filter by student name")
+    class_filter = st.text_input("Filter by class")
+    filtered_attempts = LOCAL_STORAGE.list_attempts(
+        student_filter,
+        class_filter,
     )
-    with activity_tab:
-        student_filter = st.text_input(
-            "Filter by student name",
-            key="admin_student_filter",
-        ).strip().casefold()
-        filtered_attempts = [
-            attempt for attempt in admin_attempts
-            if student_filter in format_display_name(
-                attempt.get("displayName")
-            ).casefold()
-        ]
-        render_attempt_history(filtered_attempts)
-    with students_tab:
-        user_rows = [
-            {
-                "Student": format_display_name(user.get("displayName")),
-                "Last login": format_attempt_time(user.get("lastLoginAt")),
-                "Created": format_attempt_time(user.get("createdAt")),
-                "Last attempt": format_attempt_time(user.get("lastAttemptAt")),
-                "Last score": (
-                    f"{user['lastScorePct']}%"
-                    if user.get("lastAttemptGraded")
-                    and user.get("lastScorePct") is not None
-                    else "—"
-                ),
-            }
-            for user in sorted(
-                admin_users,
-                key=lambda item: format_display_name(
-                    item.get("displayName")
-                ).casefold(),
-            )
-        ]
-        if user_rows:
-            st.dataframe(pd.DataFrame(user_rows), use_container_width=True)
-        else:
-            st.info("No student profiles have signed in yet.")
-    with admins_tab:
-        st.caption(
-            "Add or remove registered accounts from the in-app admin group. "
-            "A person must sign in once before they can be added."
-        )
-        eligible_users = [
-            user for user in admin_users
-            if user.get("uid")
-            and user["uid"] not in {
-                member.get("uid") for member in admin_members
-            }
-        ]
-        if eligible_users:
-            selected_admin = st.selectbox(
-                "Add a registered user",
-                eligible_users,
-                format_func=lambda user: format_display_name(
-                    user.get("displayName")
-                ),
-                key="admin_member_to_add",
-            )
-            if st.button("Add to admin group", type="primary"):
-                try:
-                    cloud_client.add_admin_member(
-                        selected_admin["uid"],
-                        st.session_state.cloud_user["uid"],
-                        utc_timestamp(),
-                    )
-                    st.success("User added to the admin group.")
-                    st.rerun()
-                except CloudBackendError as error:
-                    st.error(f"Could not add this admin: {error}")
-        else:
-            st.info("Every registered user is already an admin, or no users exist.")
-        users_by_uid = {
-            user.get("uid"): user
-            for user in admin_users
-            if user.get("uid")
-        }
-        for member in admin_members:
-            member_user = users_by_uid.get(member.get("uid"), {})
-            member_name = format_display_name(
-                member_user.get("displayName", member.get("displayName"))
-            )
-            member_columns = st.columns([4, 1])
-            member_columns[0].write(member_name)
-            if member.get("uid") != st.session_state.cloud_user["uid"]:
-                if member_columns[1].button(
-                    "Remove",
-                    key=f"remove_admin_{member.get('uid', member.get('_id'))}",
-                ):
-                    try:
-                        cloud_client.remove_admin_member(member["uid"])
-                        st.success(f"Removed {member_name} from the admin group.")
-                        st.rerun()
-                    except CloudBackendError as error:
-                        st.error(f"Could not remove this admin: {error}")
-            else:
-                member_columns[1].caption("You")
+    render_attempt_history(filtered_attempts)
+    if st.button("Lock admin dashboard"):
+        st.session_state.admin_authenticated = False
+        st.session_state.page_view = "home"
+        st.rerun()
     st.stop()
 
 if st.session_state.app_state == "upload":
@@ -1692,16 +1509,16 @@ if st.session_state.app_state == "upload":
                     selected_file_bytes = uploaded_file.getvalue()
                     selected_file_name = uploaded_file.name
                     if st.button("Add this file to library", key="add_uploaded_to_library"):
-                        safe_name = Path(uploaded_file.name).name
-                        destination = LIBRARY_DIR / safe_name
-                        stem, suffix = destination.stem, destination.suffix
-                        version = 2
-                        while destination.exists():
-                            destination = LIBRARY_DIR / f"{stem} ({version}){suffix}"
-                            version += 1
                         try:
-                            destination.write_bytes(selected_file_bytes)
-                        except OSError as e:
+                            destination = add_library_file(
+                                LIBRARY_DIR,
+                                uploaded_file.name,
+                                selected_file_bytes,
+                                SUPPORTED_FILE_TYPES,
+                            )
+                        except DuplicateLibraryFileError as e:
+                            st.warning(str(e))
+                        except (OSError, ValueError) as e:
                             st.error(f"Could not save this file to the library: {e}")
                         else:
                             st.success(f"Added {destination.name} to the library.")
@@ -1714,59 +1531,77 @@ if st.session_state.app_state == "upload":
     with parameter_column:
         with st.container(key="setup_panel"):
             st.markdown("### ⚙ Quiz Setup")
-            question_source = st.radio(
-                "Question source",
-                ["Generate new MCQs", "Import existing MCQs"],
-                horizontal=True,
-                key="question_source_selector"
-            )
             student_name = st.text_input(
                 "Student Name:",
                 placeholder="e.g. Irfan ul Haq"
             )
-            quiz_mode = None
-            if question_source == "Import existing MCQs":
-                quiz_mode = st.radio(
-                    "Quiz mode",
-                    ["Practice", "Examination"],
-                    horizontal=True,
-                    help=(
-                        "Practice gives feedback after each answer when an answer key is available. "
-                        "Examination mode requires detected answers or a key entered before starting."
-                    )
+            student_class = st.text_input(
+                "Class:",
+                placeholder="e.g. Grade 9A"
+            )
+            num_q = st.slider(
+                "Number of Questions",
+                min_value=3,
+                max_value=15,
+                value=5
+            )
+            difficulty = st.selectbox(
+                "Difficulty",
+                ["Easy", "Medium", "Hard"],
+                index=1,
+                help=(
+                    "Controls how closely related the source-derived "
+                    "incorrect choices are to the correct concept."
+                ),
+            )
+            generation_template = st.selectbox(
+                "Question style",
+                QUESTION_STYLES,
+                help=(
+                    "FBISE-style uses source-grounded, application-framed wording. "
+                    "It is not a verified match to a specific official model paper."
+                ),
+            )
+            custom_prompt = st.text_area(
+                "Optional custom instructions",
+                height=68,
+                placeholder=(
+                    "Example: Make the questions challenging and conceptual."
+                ),
+                help=(
+                    "Local rules recognize difficulty words (easy, medium, hard) "
+                    "and styles (recall, conceptual, application/FBISE). Other "
+                    "instructions are not interpreted; use Topic or unit for focus."
+                ),
+            )
+            generation_preferences = resolve_generation_preferences(
+                generation_template,
+                custom_prompt,
+                difficulty,
+            )
+            if custom_prompt.strip() and generation_preferences["conflict"]:
+                st.warning(
+                    "The custom instructions contain conflicting styles or "
+                    "difficulty levels; the selected controls will be used."
                 )
+            elif custom_prompt.strip() and not generation_preferences["recognized"]:
                 st.caption(
-                    "Question wording and choices are copied from the document; "
-                    "numbered section headings are ignored instead of treated as questions."
+                    "No supported control was found in the custom instructions; "
+                    "the selected style and difficulty will be used."
                 )
-            else:
-                num_q = st.slider(
-                    "Number of Questions",
-                    min_value=3,
-                    max_value=15,
-                    value=5
+            topic_unit = st.text_input(
+                "Topic or unit (optional)",
+                placeholder="e.g. RAM or Unit 2",
+                help=(
+                    "Optional. Leave blank to use the whole selected document; "
+                    "enter a topic to narrow question targets."
                 )
-                difficulty = st.selectbox(
-                    "Difficulty",
-                    ["Easy", "Medium", "Hard"],
-                    index=1,
-                    help=(
-                        "Controls how closely related the source-derived "
-                        "incorrect choices are to the correct concept."
-                    ),
-                )
-                topic_unit = st.text_input(
-                    "Topic or unit (optional)",
-                    placeholder="e.g. RAM or Unit 2",
-                    help=(
-                        "Optional. Leave blank to use the whole selected document; "
-                        "enter a topic to narrow question targets."
-                    )
-                )
-                st.info(
-                    "Questions and answer choices are generated locally from "
-                    "source facts using the built-in question logic."
-                )
+            )
+            st.info(
+                "The app generates an MCQ quiz and a separate short-answer study sheet. "
+                "It automatically detects answer-keyed MCQs in the selected document. "
+                "Templates affect generated questions; detected MCQs keep their source wording."
+            )
 
             page_ranges = st.text_input(
                 "PDF pages (optional)",
@@ -1784,8 +1619,7 @@ if st.session_state.app_state == "upload":
         with st.container(key="generate_panel"):
             st.markdown("### Generate")
             submitted = st.button(
-                "✧ Import MCQs" if question_source == "Import existing MCQs"
-                else "✧ Generate Quiz",
+                "✧ Generate MCQs",
                 key="generate_quiz_action",
                 use_container_width=True,
                 type="primary"
@@ -1793,78 +1627,13 @@ if st.session_state.app_state == "upload":
             progress_slot = st.empty()
             status_slot = st.empty()
 
-    pending_import = st.session_state.pending_import
-    if pending_import:
-        st.markdown("### Add the missing answer key")
-        st.caption(
-            "The document does not identify a correct answer for every question. "
-            "Choose each missing answer to start Examination mode."
-        )
-        for question_index, question in enumerate(pending_import["questions"]):
-            if question["answer"] is not None:
-                continue
-            answer_choices = ["Choose the correct answer"] + [
-                f"{option_label}. {option}"
-                for option_label, option in zip("ABCD", question["options"])
-            ]
-            st.selectbox(
-                f"Question {question_index + 1}: {question['question']}",
-                answer_choices,
-                key=f"import_answer_key_{question_index}"
-            )
-
-        key_column, cancel_column = st.columns(2)
-        with key_column:
-            start_examination = st.button(
-                "Start Examination",
-                key="start_imported_examination",
-                use_container_width=True,
-                type="primary"
-            )
-        with cancel_column:
-            cancel_import = st.button(
-                "Cancel import",
-                key="cancel_imported_examination",
-                use_container_width=True
-            )
-        if cancel_import:
-            st.session_state.pending_import = None
-            st.rerun()
-        if start_examination:
-            pending_questions = pending_import["questions"]
-            missing_answers = []
-            for question_index, question in enumerate(pending_questions):
-                if question["answer"] is not None:
-                    continue
-                selected_label = st.session_state.get(
-                    f"import_answer_key_{question_index}",
-                    "Choose the correct answer"
-                )
-                if selected_label == "Choose the correct answer":
-                    missing_answers.append(question_index + 1)
-                    continue
-                answer_index = "ABCD".index(selected_label[0])
-                question["answer"] = question["options"][answer_index]
-            if missing_answers:
-                st.error(
-                    "Enter a correct answer for every question before starting. "
-                    f"Missing: {', '.join(map(str, missing_answers))}."
-                )
-            else:
-                start_quiz(
-                    pending_questions,
-                    pending_import["student_name"],
-                    pending_import["file_name"],
-                    "Examination",
-                    "import"
-                )
-                st.rerun()
-
     if submitted:
         if not selected_file_name:
             status_slot.error("Choose a library book or upload a document first.")
         elif not student_name.strip():
             status_slot.error("Please enter the student's name.")
+        elif not student_class.strip():
+            status_slot.error("Please enter the student's class.")
         elif preview_error:
             status_slot.error(f"Could not prepare the selected book: {preview_error}")
         else:
@@ -1873,7 +1642,9 @@ if st.session_state.app_state == "upload":
             generation_status_message = [""]
             questions = []
             source_lines = []
-            needs_manual_answer_key = False
+            short_answer_questions = []
+            question_source = "generated"
+            mcq_fallback_notice = None
 
             def update_generation_progress(value, message):
                 generation_status_message[0] = message
@@ -1889,44 +1660,55 @@ if st.session_state.app_state == "upload":
                     update_generation_progress(2, "Validating the requested PDF page ranges.")
                     selected_pages = parse_page_selection(page_ranges)
 
-                if question_source == "Import existing MCQs":
-                    if selected_file_path and library_stat:
-                        current_stat = selected_file_path.stat()
-                        if (
-                            current_stat.st_mtime_ns != library_stat.st_mtime_ns
-                            or current_stat.st_size != library_stat.st_size
-                        ):
-                            raise RuntimeError(
-                                "The selected library file changed. Select it again and retry."
-                            )
-                        document_bytes = selected_file_path.read_bytes()
-                    else:
-                        document_bytes = selected_file_bytes
-                    source_lines = extract_mcq_lines(
-                        document_bytes,
-                        selected_file_name,
-                        selected_pages,
-                        progress_callback=update_generation_progress
-                    )
-                    questions = parse_imported_mcqs(source_lines)
-                    if not questions:
-                        raise ValueError(
-                            "No usable MCQs were detected. Numbered section headings and "
-                            "unstructured lists are ignored. Use a clear question followed "
-                            "by four choices labeled A-D or 1-4, each on its own line."
+                if selected_file_path and library_stat:
+                    current_stat = selected_file_path.stat()
+                    if (
+                        current_stat.st_mtime_ns != library_stat.st_mtime_ns
+                        or current_stat.st_size != library_stat.st_size
+                    ):
+                        raise RuntimeError(
+                            "The selected library file changed. Select it again and retry."
                         )
-                    update_generation_progress(80, "Checking imported question formatting.")
+                    document_bytes = selected_file_path.read_bytes()
+                else:
+                    document_bytes = selected_file_bytes
+
+                update_generation_progress(
+                    5,
+                    "Checking the document for multiple-choice questions and an answer key."
+                )
+                document_mcqs = parse_mcq_source(extract_mcq_lines(
+                    document_bytes,
+                    selected_file_name,
+                    selected_pages,
+                    progress_callback=update_generation_progress
+                ))
+                questions = select_answered_mcqs(document_mcqs, num_q)
+                if questions:
                     for question in questions:
-                        question["source_location"] = selected_file_name
-                    if quiz_mode == "Examination":
-                        needs_manual_answer_key = any(
-                            question["answer"] is None for question in questions
-                        )
+                        question["source_location"] = None
+                        question["source_text"] = question["question"]
+                    short_answer_questions = [
+                        {
+                            "question": question["question"],
+                            "answer": question["answer"],
+                            "topic": question["topic"],
+                            "page": question.get("page"),
+                        }
+                        for question in questions
+                    ]
+                    question_source = "document_mcqs"
                     update_generation_progress(
                         100,
-                        f"Imported {len(questions)} questions with their original answer choices."
+                        f"Selected {len(questions)} answer-keyed MCQs from the document."
                     )
                 else:
+                    if document_mcqs:
+                        mcq_fallback_notice = (
+                            "MCQ-style questions were detected, but no usable correct "
+                            "answers were found. Generating questions from the source "
+                            "content instead."
+                        )
                     search_query = topic_unit.strip()
                     is_pdf = Path(selected_file_name).suffix.lower() == ".pdf"
                     if (
@@ -2029,7 +1811,6 @@ if st.session_state.app_state == "upload":
                         if selected_file_path and library_stat and selected_pages is None:
                             try:
                                 save_document_fact_cache(
-                                    cloud_client,
                                     selected_file_name,
                                     library_stat.st_mtime_ns,
                                     library_stat.st_size,
@@ -2039,10 +1820,10 @@ if st.session_state.app_state == "upload":
                                     58,
                                     "Saved extracted topics and units for faster future quizzes."
                                 )
-                            except CloudBackendError as error:
+                            except sqlite3.Error as error:
                                 status_slot.warning(
                                     f"Questions will still be generated, but the document "
-                                    f"cache could not be saved: {error}"
+                                    f"cache could not be saved locally: {error}"
                                 )
 
                     update_generation_progress(
@@ -2054,56 +1835,79 @@ if st.session_state.app_state == "upload":
                         num_questions=num_q,
                         topic_filter=topic_unit.strip(),
                         progress_callback=update_generation_progress,
-                        difficulty=difficulty,
+                        difficulty=generation_preferences["difficulty"],
+                        question_style=generation_preferences["question_style"],
+                    )
+                    short_answer_facts = extract_exam_facts(source_lines)
+                    topic_terms = search_terms(topic_unit.strip())
+                    if topic_terms:
+                        short_answer_facts = [
+                            fact for fact in short_answer_facts
+                            if search_terms_match(
+                                topic_terms,
+                                search_terms(f"{fact['topic']} {fact['text']}")
+                            )
+                        ]
+                    short_answer_questions = generate_short_answer_items(
+                        short_answer_facts,
+                        num_q,
                     )
             except ValueError as e:
                 status_slot.error(str(e))
             except Exception as e:
                 status_slot.error(f"Question generation failed: {e}")
             else:
-                if question_source == "Import existing MCQs":
-                    if needs_manual_answer_key:
-                        st.session_state.pending_import = {
-                            "questions": questions,
-                            "student_name": student_name,
-                            "file_name": selected_file_name,
-                            "quiz_mode": quiz_mode
-                        }
-                        st.rerun()
-                    else:
-                        start_quiz(
-                            questions,
-                            student_name,
-                            selected_file_name,
-                            quiz_mode,
-                            "import"
+                if not questions:
+                    if mcq_fallback_notice and not source_lines:
+                        status_slot.error(
+                            f"{mcq_fallback_notice} No selectable source text could be "
+                            "extracted. If this is a scanned PDF, verify that OCR is "
+                            "installed."
                         )
-                        st.rerun()
-                elif not source_lines:
-                    status_slot.error(
-                        "No selectable text could be extracted from this file. "
-                        "If it is a scanned PDF, verify that OCR is installed and retry."
-                    )
-                elif not questions:
-                    status_slot.error(
-                        generation_status_message[0]
-                        or "No suitable source-backed questions could be built from this selection."
-                    )
+                    elif mcq_fallback_notice:
+                        status_slot.error(
+                            f"{mcq_fallback_notice} "
+                            + (
+                                generation_status_message[0]
+                                or "No suitable source-backed questions could be built."
+                            )
+                        )
+                    elif question_source == "generated" and not source_lines:
+                        status_slot.error(
+                            "No selectable text could be extracted from this file. "
+                            "If it is a scanned PDF, verify that OCR is installed and retry."
+                        )
+                    else:
+                        status_slot.error(
+                            generation_status_message[0]
+                            or "No suitable source-backed questions could be built from this selection."
+                        )
                 else:
                     start_quiz(
                         questions,
                         student_name,
+                        student_class,
                         selected_file_name,
-                        "Examination",
-                        "generated"
+                        question_source,
+                        short_answer_questions,
                     )
-                    st.session_state.generation_notice = (
-                        f"Created {len(questions)} questions instead of {num_q}: "
-                        "some source concepts did not pass the grounding and distinct-choice "
-                        "checks. Try another source or reduce the requested question count."
-                        if len(questions) < num_q
-                        else None
-                    )
+                    if question_source == "document_mcqs" and len(questions) < num_q:
+                        st.session_state.generation_notice = (
+                            f"Found only {len(questions)} answer-keyed MCQs; "
+                            "the quiz will use those."
+                        )
+                    elif mcq_fallback_notice:
+                        st.session_state.generation_notice = mcq_fallback_notice
+                        if len(questions) < num_q:
+                            st.session_state.generation_notice += (
+                                f" Created {len(questions)} of {num_q} requested questions."
+                            )
+                    elif question_source == "generated" and len(questions) < num_q:
+                        st.session_state.generation_notice = (
+                            f"Created {len(questions)} questions instead of {num_q}: "
+                            "some source concepts did not pass the grounding and distinct-choice "
+                            "checks. Try another source or reduce the requested question count."
+                        )
                     st.rerun()
 
 elif st.session_state.app_state == "quiz":
@@ -2138,9 +1942,11 @@ elif st.session_state.app_state == "quiz":
         st.markdown("---")
         st.markdown("**Choose your answer:**")
         selected_option = st.session_state.user_answers.get(idx)
-        option_labels = "ABCD"
         with st.container(key=f"answer_grid_{idx}"):
             option_columns = st.columns(2, gap="small")
+            option_labels = q.get("option_labels")
+            if not isinstance(option_labels, list) or len(option_labels) != len(q["options"]):
+                option_labels = list("ABCD"[:len(q["options"])])
             for option_index, option in enumerate(q["options"]):
                 is_selected = selected_option == option
                 card_state = "selected_" if is_selected else ""
@@ -2160,16 +1966,6 @@ elif st.session_state.app_state == "quiz":
                             st.session_state.user_answers[idx] = option
                             st.rerun()
 
-        if st.session_state.quiz_mode == "Practice" and selected_option is not None:
-            if q["answer"] is None:
-                st.info(
-                    "Practice mode: this document does not provide an answer key for this question."
-                )
-            elif selected_option == q["answer"]:
-                st.success("Correct.")
-            else:
-                st.error(f"Not quite. The answer key gives: {q['answer']}")
-
         col1, col2 = st.columns([1, 1])
         with col2:
             if st.button(
@@ -2185,22 +1981,6 @@ elif st.session_state.app_state == "quiz":
                     st.session_state.current_index += 1
                     st.rerun()
                 else:
-                    if (
-                        st.session_state.quiz_mode == "Practice"
-                        and any(question["answer"] is None for question in questions)
-                    ):
-                        st.session_state.score_data = {
-                            "graded": False,
-                            "total": len(questions),
-                            "improvement_plan": (
-                                "This practice quiz was not scored because the source document "
-                                "does not include a complete answer key."
-                            ),
-                            "wrong_answers": []
-                        }
-                        st.session_state.app_state = "results"
-                        st.rerun()
-
                     correct_count = 0
                     wrong_list = []
                     for q_i, quest in enumerate(questions):
@@ -2209,8 +1989,8 @@ elif st.session_state.app_state == "quiz":
                             correct_count += 1
                         else:
                             selected_fact = quest.get("option_explanations", {}).get(ans)
-                            imported_question = (
-                                st.session_state.question_source == "import"
+                            document_mcq = (
+                                st.session_state.question_source == "document_mcqs"
                             )
                             wrong_list.append({
                                 "question": quest["question"],
@@ -2221,18 +2001,17 @@ elif st.session_state.app_state == "quiz":
                                 "source_text": quest.get("source_text", ""),
                                 "selected_option_fact": selected_fact or "",
                                 "correct_reason": (
-                                    f"The imported document's answer key marks "
-                                    f"{quest['answer']} as correct."
-                                    if imported_question
+                                    f"The selected document marks {quest['answer']} as correct."
+                                    if document_mcq
                                     else (
                                         f"{quest['answer']} is correct because the source states: "
                                         f"{quest['source_text']}"
                                     )
                                 ),
                                 "incorrect_reason": (
-                                    f"The imported answer key lists {quest['answer']} as correct, "
+                                    f"The document identifies {quest['answer']} as correct, "
                                     f"not {ans}."
-                                    if imported_question
+                                    if document_mcq
                                     else (
                                         f"The source describes {ans} this way: \"{selected_fact}\" "
                                         f"That fact is about {ans}; this question asks about "
@@ -2277,12 +2056,12 @@ elif st.session_state.app_state == "results":
     data = st.session_state.score_data
     if not st.session_state.attempt_saved:
         try:
-            save_completed_attempt(cloud_client)
-            st.success("Your quiz activity was saved to your Google-linked profile.")
-        except CloudBackendError as error:
+            save_completed_attempt()
+            st.success("Your quiz activity was saved on this computer.")
+        except sqlite3.Error as error:
             st.error(
-                "This result has not been saved to your profile yet. "
-                f"Check your internet connection and retry: {error}"
+                "This result has not been saved to the local database yet. "
+                f"Check the database file and retry: {error}"
             )
             if st.button("Retry saving quiz activity"):
                 st.rerun()
@@ -2296,7 +2075,7 @@ elif st.session_state.app_state == "results":
                 delta=f"{data['correct_count']}/{data['total']} Correct"
             )
         else:
-            st.title("📘 Practice Complete")
+            st.title("📘 Quiz Complete")
 
         st.markdown("### 💡 Improvement Summary & Plan")
         st.info(data["improvement_plan"])
@@ -2312,6 +2091,33 @@ elif st.session_state.app_state == "results":
                 st.write(f"Why your answer is incorrect: {item['incorrect_reason']}")
         elif data.get("graded", True):
             st.success("Zero incorrect answers! Perfect score!")
+
+        short_answer_questions = st.session_state.short_answer_questions
+        if short_answer_questions:
+            st.markdown("### Short-Answer Study Sheet")
+            st.caption(
+                "Review these source-based questions and answers after completing the MCQ quiz."
+            )
+            for question_index, item in enumerate(short_answer_questions, start=1):
+                st.markdown(
+                    f"**Q{question_index}.** {html.escape(item['question'])}<br>"
+                    f"**Answer:** {html.escape(item['answer'])}",
+                    unsafe_allow_html=True,
+                )
+                if item.get("page") is not None:
+                    st.caption(f"Source: Page {item['page']}")
+
+            study_sheet = "\n\n".join(
+                f"Q{question_index}. {item['question']}\nAnswer: {item['answer']}"
+                for question_index, item in enumerate(short_answer_questions, start=1)
+            )
+            st.download_button(
+                label="Download Short-Answer Study Sheet",
+                data=study_sheet,
+                file_name=f"{Path(st.session_state.file_name).stem}_short_answers.txt",
+                mime="text/plain",
+                key="download_short_answer_sheet",
+            )
 
         st.markdown("---")
 

@@ -1,38 +1,27 @@
-import asyncio
+import os
 import unittest
+from unittest.mock import patch
 
-from run_main import PopupOpenerPolicy
+from run_main import main
 
 
-class PopupOpenerPolicyTests(unittest.TestCase):
-    def test_sets_popup_compatible_policy_on_http_responses(self):
-        messages = []
+class RunMainTests(unittest.TestCase):
+    @patch("run_main.uvicorn.run")
+    @patch("run_main.streamlit.App")
+    def test_main_defaults_to_localhost(self, streamlit_app, uvicorn_run):
+        app = object()
+        streamlit_app.return_value = app
+        environment = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in {"PORT", "STREAMLIT_SERVER_ADDRESS"}
+        }
 
-        async def app(scope, receive, send):
-            await send({
-                "type": "http.response.start",
-                "status": 200,
-                "headers": [
-                    (b"content-type", b"text/html"),
-                    (b"cross-origin-opener-policy", b"unsafe-none"),
-                ],
-            })
+        with patch.dict(os.environ, environment, clear=True):
+            main()
 
-        async def send(message):
-            messages.append(message)
-
-        asyncio.run(PopupOpenerPolicy(app)(
-            {"type": "http"},
-            None,
-            send,
-        ))
-
-        response_headers = dict(messages[0]["headers"])
-        self.assertEqual(
-            response_headers[b"cross-origin-opener-policy"],
-            b"same-origin-allow-popups",
-        )
-        self.assertEqual(response_headers[b"content-type"], b"text/html")
+        streamlit_app.assert_called_once()
+        uvicorn_run.assert_called_once_with(app, host="127.0.0.1", port=8501)
 
 
 if __name__ == "__main__":

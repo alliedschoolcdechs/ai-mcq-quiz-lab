@@ -1,11 +1,11 @@
 # Credentials and local settings
-firebase_config.json
 .env
 .env.*
 !.env.example
 
 # Local study materials and user data
 library/*
+*.sqlite3
 *.sqlite
 *.db
 

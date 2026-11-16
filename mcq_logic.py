@@ -2,7 +2,11 @@ import math
 import random
 import re
 
-from source_facts import is_readable_source_text, is_valid_concept_label
+from source_facts import (
+    definition_fragment,
+    is_readable_source_text,
+    is_valid_concept_label,
+)
 
 
 _STOP_WORDS = {
@@ -31,6 +35,57 @@ _ACTION_PATTERNS = (
     (re.compile(r"\b(?:is|are)\s+responsible\s+for\s+(.+)$", re.IGNORECASE),
      "is responsible for"),
 )
+
+QUESTION_STYLES = (
+    "Balanced",
+    "Direct recall",
+    "Conceptual",
+    "FBISE-style",
+)
+
+
+def resolve_generation_preferences(template, custom_prompt, difficulty):
+    """Apply supported style and difficulty keywords to local generation."""
+    if template not in QUESTION_STYLES:
+        raise ValueError("template must be a supported question style")
+    if str(difficulty).casefold() not in {"easy", "medium", "hard"}:
+        raise ValueError("difficulty must be Easy, Medium, or Hard")
+
+    question_style = template
+    resolved_difficulty = difficulty
+    prompt = str(custom_prompt or "").casefold()
+    style_patterns = {
+        "Direct recall": r"\b(recall|definition|direct)\b",
+        "Conceptual": r"\b(conceptual|understanding|reasoning|explain)\b",
+        "FBISE-style": r"\b(fbise|application|scenario|practical)\b",
+    }
+    difficulty_patterns = {
+        "Easy": r"\b(easy|simple|basic|beginner)\b",
+        "Medium": r"\b(medium|moderate|balanced)\b",
+        "Hard": r"\b(hard|challenging|difficult|advanced)\b",
+    }
+    matched_styles = [
+        style for style, pattern in style_patterns.items()
+        if re.search(pattern, prompt)
+    ]
+    matched_difficulties = [
+        level for level, pattern in difficulty_patterns.items()
+        if re.search(pattern, prompt)
+    ]
+
+    conflict = len(matched_styles) > 1 or len(matched_difficulties) > 1
+    if not conflict:
+        if matched_styles:
+            question_style = matched_styles[0]
+        if matched_difficulties:
+            resolved_difficulty = matched_difficulties[0]
+    return {
+        "question_style": question_style,
+        "difficulty": resolved_difficulty,
+        "recognized": bool(matched_styles or matched_difficulties) and not conflict,
+        "conflict": conflict,
+    }
+
 
 def _normalize_token(token):
     token = token.casefold()
@@ -78,8 +133,23 @@ def _cosine_similarity(left, right, inverse_frequency):
     return dot_product / (left_norm * right_norm)
 
 
-def _question_for(record, rng):
+def _question_for(record, rng, question_style="Balanced"):
     definition = re.sub(r"\s+", " ", record["definition"]).strip().rstrip(".!?")
+    if question_style == "Direct recall":
+        return (
+            "According to the source, which concept matches this description: "
+            f"{definition}?"
+        )
+    if question_style == "Conceptual":
+        return (
+            "Which concept is best explained by this source statement: "
+            f"{definition}?"
+        )
+    if question_style == "FBISE-style":
+        return (
+            "Which concept best satisfies this requirement: "
+            f"{definition}?"
+        )
     for pattern, fixed_verb in _ACTION_PATTERNS:
         match = pattern.search(definition)
         if not match:
@@ -109,12 +179,15 @@ def generate_question_items(
     distractor_records=None,
     rng=None,
     difficulty="Medium",
+    question_style="Balanced",
 ):
     """Build source-grounded questions with related, document-derived distractors."""
     rng = rng or random
     difficulty = str(difficulty).casefold()
     if difficulty not in {"easy", "medium", "hard"}:
         raise ValueError("difficulty must be Easy, Medium, or Hard")
+    if question_style not in QUESTION_STYLES:
+        raise ValueError("question_style must be a supported question style")
     target_records = [
         record for record in records
         if isinstance(record.get("id"), str)
@@ -254,7 +327,7 @@ def generate_question_items(
         )
         questions.append({
             "source_fact_id": target["id"],
-            "question": _question_for(target, rng),
+            "question": _question_for(target, rng, question_style),
             "question_type": question_type,
             "options": options,
             "answer": target["concept"],
@@ -270,6 +343,53 @@ def generate_question_items(
         for distractor in distractors:
             key = distractor["concept"].casefold()
             distractor_usage[key] = distractor_usage.get(key, 0) + 1
+        if len(questions) >= num_questions:
+            break
+    return questions
+
+
+def generate_short_answer_items(facts, num_questions):
+    """Create concise, source-grounded short-answer questions from extracted facts."""
+    questions = []
+    seen = set()
+    for fact in facts:
+        topic = fact.get("topic")
+        text = fact.get("text")
+        answer = definition_fragment(fact)
+        if not isinstance(topic, str) or not isinstance(text, str) or not answer:
+            continue
+
+        subject_match = re.match(
+            rf"^\s*(?:(?:a|an|the)\s+)?{re.escape(topic)}\b\s*",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if subject_match is None:
+            continue
+
+        predicate = text[subject_match.end():].strip(" \t,;:-")
+        if re.match(r"^(?:means)\b", predicate, flags=re.IGNORECASE):
+            question = f"What does {topic} mean?"
+        elif re.match(r"^(?:refers\s+to)\b", predicate, flags=re.IGNORECASE):
+            question = f"What does {topic} refer to?"
+        elif re.match(r"^(?:is|are|was|were)\b", predicate, flags=re.IGNORECASE):
+            question = f"What is {topic}?"
+        else:
+            question = f"What does {topic} do?"
+
+        identity = (question.casefold(), answer.casefold())
+        if identity in seen:
+            continue
+        seen.add(identity)
+        questions.append({
+            "question": question,
+            "answer": answer,
+            "topic": topic,
+            "source_text": text,
+            "page": fact.get("page"),
+            "unit": fact.get("unit"),
+            "unit_group": fact.get("unit_group"),
+        })
         if len(questions) >= num_questions:
             break
     return questions

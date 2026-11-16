@@ -1,7 +1,12 @@
 import random
 import unittest
 
-from mcq_logic import generate_question_items
+from mcq_logic import (
+    generate_question_items,
+    generate_short_answer_items,
+    resolve_generation_preferences,
+)
+from source_facts import extract_exam_facts
 
 
 class SourceGroundedQuestionTests(unittest.TestCase):
@@ -96,6 +101,63 @@ class SourceGroundedQuestionTests(unittest.TestCase):
         self.assertIn("used to store", ram["question"])
         self.assertEqual(ram["question_type"], "function")
 
+    def test_question_style_changes_generated_stems(self):
+        questions = {
+            style: generate_question_items(
+                self.records,
+                6,
+                rng=random.Random(1),
+                question_style=style,
+            )
+            for style in ("Balanced", "Direct recall", "Conceptual", "FBISE-style")
+        }
+
+        self.assertIn(
+            "According to the source",
+            next(q for q in questions["Direct recall"] if q["answer"] == "RAM")["question"],
+        )
+        self.assertIn(
+            "best explained",
+            next(q for q in questions["Conceptual"] if q["answer"] == "RAM")["question"],
+        )
+        self.assertIn(
+            "best satisfies this requirement",
+            next(q for q in questions["FBISE-style"] if q["answer"] == "RAM")["question"],
+        )
+
+    def test_custom_prompt_overrides_supported_style_and_difficulty(self):
+        preferences = resolve_generation_preferences(
+            "Balanced",
+            "Create challenging application questions.",
+            "Easy",
+        )
+
+        self.assertEqual(preferences["question_style"], "FBISE-style")
+        self.assertEqual(preferences["difficulty"], "Hard")
+        self.assertTrue(preferences["recognized"])
+
+    def test_unsupported_custom_prompt_preserves_selected_controls(self):
+        preferences = resolve_generation_preferences(
+            "Conceptual",
+            "Add a fun fact after each question.",
+            "Medium",
+        )
+
+        self.assertEqual(preferences["question_style"], "Conceptual")
+        self.assertEqual(preferences["difficulty"], "Medium")
+        self.assertFalse(preferences["recognized"])
+
+    def test_conflicting_custom_prompt_preserves_selected_controls(self):
+        preferences = resolve_generation_preferences(
+            "Balanced",
+            "Make questions easy and challenging.",
+            "Medium",
+        )
+
+        self.assertEqual(preferences["question_style"], "Balanced")
+        self.assertEqual(preferences["difficulty"], "Medium")
+        self.assertTrue(preferences["conflict"])
+
     def test_memory_question_uses_same_topic_as_its_distractors(self):
         questions = generate_question_items(
             self.records,
@@ -128,6 +190,14 @@ class SourceGroundedQuestionTests(unittest.TestCase):
     def test_rejects_unsupported_difficulty(self):
         with self.assertRaisesRegex(ValueError, "difficulty must be"):
             generate_question_items(self.records, 1, difficulty="Expert")
+
+    def test_rejects_unsupported_question_style(self):
+        with self.assertRaisesRegex(ValueError, "question_style must be"):
+            generate_question_items(
+                self.records,
+                1,
+                question_style="Unrecognized",
+            )
 
     def test_omits_near_duplicate_definition_as_distractor(self):
         near_duplicate = {
@@ -190,6 +260,38 @@ class SourceGroundedQuestionTests(unittest.TestCase):
             [option for question in questions for option in question["options"]],
         )
         self.assertTrue(all(question["answer"] != "There" for question in questions))
+
+    def test_builds_short_answers_from_source_definition_and_function_facts(self):
+        source_lines = [
+            {
+                "text": (
+                    "RAM is temporary memory used to store data and programs "
+                    "currently being processed by a computer."
+                ),
+                "page": 2,
+                "unit": "Computer memory",
+            },
+            {
+                "text": (
+                    "The CPU processes instructions and controls operations "
+                    "in a computer system to execute programs."
+                ),
+                "page": 3,
+                "unit": "Computer hardware",
+            },
+        ]
+        facts = extract_exam_facts(source_lines)
+
+        questions = generate_short_answer_items(facts, 5)
+
+        self.assertEqual(len(questions), 2)
+        ram = next(question for question in questions if question["topic"] == "RAM")
+        cpu = next(question for question in questions if question["topic"] == "CPU")
+        self.assertEqual(ram["question"], "What is RAM?")
+        self.assertIn("temporary memory", ram["answer"])
+        self.assertEqual(cpu["question"], "What does CPU do?")
+        self.assertIn("processes instructions", cpu["answer"])
+        self.assertEqual(ram["page"], 2)
 
 
 if __name__ == "__main__":
