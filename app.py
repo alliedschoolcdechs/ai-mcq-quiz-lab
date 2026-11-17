@@ -1773,8 +1773,8 @@ if st.session_state.app_state == "upload":
                 else:
                     if document_mcqs:
                         mcq_fallback_notice = (
-                            "MCQ-style questions were detected, but no usable correct "
-                            "answers were found. Generating questions from the source "
+                            "MCQ-style items were detected, but none had a usable answer "
+                            "and question structure. Generating questions from the source "
                             "content instead."
                         )
                     search_query = topic_unit.strip()

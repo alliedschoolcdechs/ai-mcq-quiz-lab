@@ -54,10 +54,11 @@ QUESTION_LIKE_OPTION = re.compile(
     flags=re.IGNORECASE
 )
 INSTRUCTION_STEM = re.compile(
-    r"^\s*(?:write|answer|respond to|complete|solve)\b.*"
-    r"\b(?:following|questions?)\b",
+    r"^\s*(?:write|answer|respond to|complete|solve|select|choose|"
+    r"mark|tick|circle)\b.*\b(?:following|questions?|answers?|options?)\b",
     flags=re.IGNORECASE
 )
+MAX_IMPORTED_MCQ_STEM_LENGTH = 600
 
 
 def mcq_lines_from_table(headers, rows):
@@ -317,9 +318,17 @@ def select_answered_mcqs(questions, num_questions, rng=None):
     answered_questions = [
         question
         for question in questions
-        if isinstance(question.get("answer"), str)
+        if isinstance(question.get("question"), str)
+        and 0 < len(question["question"].strip()) <= MAX_IMPORTED_MCQ_STEM_LENGTH
+        and isinstance(question.get("answer"), str)
+        and isinstance(question.get("options"), list)
         and question["answer"] in question.get("options", [])
         and len(question.get("options", [])) == 4
+        and len({
+            option.strip().casefold()
+            for option in question["options"]
+            if isinstance(option, str)
+        }) == 4
         and not INSTRUCTION_STEM.match(str(question.get("question", "")))
         and not any(
             not isinstance(option, str)

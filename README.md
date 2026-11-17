@@ -82,7 +82,8 @@ applied, and no external AI service is used.
   When more questions are detected than requested, the app randomly selects
   from the answer-keyed bank; the answer key is used to grade student
   selections. If there are no usable answer-keyed MCQs, new questions are
-  generated from the document's source facts.
+  generated from the document's source facts. Generic instruction prompts and
+  excessively long extracted passages are rejected as malformed question stems.
 - For automatic detection, put each question and each of its four answer
   choices on separate lines, with choices labeled `A-D` or `1-4`. Correct
   answers can be shown in an `Answer Key` section (for example `1-A, 2-C`),

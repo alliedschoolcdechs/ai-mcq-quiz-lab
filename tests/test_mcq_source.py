@@ -192,6 +192,36 @@ class McqSourceParsingTests(unittest.TestCase):
             [],
         )
 
+    def test_rejects_generic_select_instruction_as_a_quiz_question(self):
+        parsed = parse_mcq_source([
+            "1. Select the suitable answer for the following multiple-choice questions.",
+            "A. Data and Information",
+            "B. Database",
+            "C. Information system",
+            "D. Data processing",
+            "Correct Answer: B",
+        ])
+
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(select_answered_mcqs(parsed, 1), [])
+
+    def test_rejects_long_passage_mistaken_for_a_question_stem(self):
+        long_stem = (
+            "1. Which concept is being described? "
+            + "This section explains how computer systems process information. " * 20
+        )
+        parsed = parse_mcq_source([
+            long_stem,
+            "A. Data and Information",
+            "B. Database",
+            "C. Information system",
+            "D. Data processing",
+            "Correct Answer: B",
+        ])
+
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(select_answered_mcqs(parsed, 1), [])
+
     def test_selects_different_random_subsets_from_a_large_mcq_bank(self):
         question_bank = [
             {
