@@ -19,6 +19,11 @@ from mcq_source import (
     parse_mcq_source,
     select_answered_mcqs,
 )
+from attempt_review import (
+    attempt_option_lines,
+    escape_question_html,
+    question_option_labels,
+)
 from mcq_logic import (
     QUESTION_STYLES,
     generate_question_items,
@@ -1138,6 +1143,13 @@ def create_pdf_scorecard(student_name, subject, score_pct, wrong_answers, improv
         pdf.set_font("Helvetica", "", 10)
         for idx, item in enumerate(wrong_answers, start=1):
             add_pdf_paragraph(pdf, f"Q: {item['question']}")
+            for option_line in attempt_option_lines(
+                item.get("options"),
+                item.get("option_labels"),
+                item.get("user_answer"),
+                item.get("correct_answer"),
+            ):
+                add_pdf_paragraph(pdf, option_line)
             add_pdf_paragraph(pdf, f"Source: {item['source_location']}")
             add_pdf_paragraph(pdf, f"Your Answer: {item['user_answer']}")
             add_pdf_paragraph(pdf, f"Correct Answer: {item['correct_answer']}")
@@ -1209,6 +1221,8 @@ def build_attempt_record():
         answer_records.append({
             "questionNumber": question_index + 1,
             "question": question["question"],
+            "options": list(question.get("options", [])),
+            "optionLabels": question_option_labels(question),
             "selectedAnswer": selected_answer,
             "correctAnswer": correct_answer,
             "isCorrect": (
@@ -1312,9 +1326,22 @@ def render_attempt_history(attempts):
             )
             for answer in attempt.get("answers", []):
                 st.markdown(
-                    f"**{answer.get('questionNumber', '')}. "
-                    f"{answer.get('question', '')}**"
+                    f"<p><strong>{answer.get('questionNumber', '')}. "
+                    f"{escape_question_html(answer.get('question', ''))}</strong></p>",
+                    unsafe_allow_html=True,
                 )
+                option_lines = attempt_option_lines(
+                    answer.get("options"),
+                    answer.get("optionLabels"),
+                    answer.get("selectedAnswer"),
+                    answer.get("correctAnswer"),
+                )
+                if option_lines:
+                    options_html = "".join(
+                        f"<li>{html.escape(option_line)}</li>"
+                        for option_line in option_lines
+                    )
+                    st.markdown(f"<ul>{options_html}</ul>", unsafe_allow_html=True)
                 st.write(f"Student answer: {answer.get('selectedAnswer') or '—'}")
                 if answer.get("correctAnswer") is not None:
                     st.write(f"Answer key: {answer['correctAnswer']}")
@@ -2002,7 +2029,7 @@ elif st.session_state.app_state == "quiz":
         st.markdown(f"""
         <div class="fade-in-card">
             <h3>Question {idx + 1}</h3>
-            <p style="font-size: 1.1rem; font-weight: 500;">{html.escape(q['question'])}</p>
+            <p style="font-size: 1.1rem; font-weight: 500;">{escape_question_html(q['question'])}</p>
             <p style="font-size: 0.9rem; color: #b7c4d6;">Source: {html.escape(format_source_location(q))}</p>
         </div>
         """, unsafe_allow_html=True)
@@ -2012,9 +2039,7 @@ elif st.session_state.app_state == "quiz":
         selected_option = st.session_state.user_answers.get(idx)
         with st.container(key=f"answer_grid_{idx}"):
             option_columns = st.columns(2, gap="small")
-            option_labels = q.get("option_labels")
-            if not isinstance(option_labels, list) or len(option_labels) != len(q["options"]):
-                option_labels = list("ABCD"[:len(q["options"])])
+            option_labels = question_option_labels(q)
             for option_index, option in enumerate(q["options"]):
                 is_selected = selected_option == option
                 card_state = "selected_" if is_selected else ""
@@ -2062,6 +2087,8 @@ elif st.session_state.app_state == "quiz":
                             )
                             wrong_list.append({
                                 "question": quest["question"],
+                                "options": list(quest.get("options", [])),
+                                "option_labels": question_option_labels(quest),
                                 "topic": quest["topic"],
                                 "user_answer": ans,
                                 "correct_answer": quest["answer"],
@@ -2151,7 +2178,22 @@ elif st.session_state.app_state == "results":
         if data["wrong_answers"]:
             st.markdown("### 🔍 Incorrect Responses Review")
             for item in data["wrong_answers"]:
-                st.markdown(f"#### {item['question']}")
+                st.markdown(
+                    f"<p><strong>{escape_question_html(item['question'])}</strong></p>",
+                    unsafe_allow_html=True,
+                )
+                option_lines = attempt_option_lines(
+                    item.get("options"),
+                    item.get("option_labels"),
+                    item.get("user_answer"),
+                    item.get("correct_answer"),
+                )
+                if option_lines:
+                    options_html = "".join(
+                        f"<li>{html.escape(option_line)}</li>"
+                        for option_line in option_lines
+                    )
+                    st.markdown(f"<ul>{options_html}</ul>", unsafe_allow_html=True)
                 st.caption(f"Source: {item['source_location']}")
                 st.error(f"Your answer: {item['user_answer']}")
                 st.success(f"Correct answer: {item['correct_answer']}")
