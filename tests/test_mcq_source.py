@@ -1,3 +1,4 @@
+import random
 import unittest
 
 from mcq_source import (
@@ -189,6 +190,38 @@ class McqSourceParsingTests(unittest.TestCase):
         self.assertEqual(
             select_answered_mcqs(parsed, 5),
             [],
+        )
+
+    def test_selects_different_random_subsets_from_a_large_mcq_bank(self):
+        question_bank = [
+            {
+                "id": index,
+                "question": f"Which source concept is question {index} about?",
+                "options": [
+                    f"Choice {index}-{label}"
+                    for label in "ABCD"
+                ],
+                "answer": f"Choice {index}-A",
+            }
+            for index in range(12)
+        ]
+
+        first_selection = select_answered_mcqs(
+            question_bank,
+            4,
+            rng=random.Random(11),
+        )
+        second_selection = select_answered_mcqs(
+            question_bank,
+            4,
+            rng=random.Random(23),
+        )
+
+        self.assertEqual(len(first_selection), 4)
+        self.assertEqual(len(second_selection), 4)
+        self.assertNotEqual(
+            {question["id"] for question in first_selection},
+            {question["id"] for question in second_selection},
         )
 
 

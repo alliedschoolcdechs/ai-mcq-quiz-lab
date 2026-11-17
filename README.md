@@ -57,15 +57,18 @@ restrictions. If each PC runs its own copy, records remain separate.
 ## Quiz generation and source documents
 
 The app generates grounded questions locally from extracted source facts using
-built-in logic; no external AI service receives the documents. Conceptual and
-FBISE-style templates frame source facts as computer tasks when the text
-supports that wording. Distractors are ranked by topic/unit and text similarity, near-duplicate
-definitions are excluded, and distractor concepts are not reused within a quiz
-while enough related choices remain. If the source does not provide three
-related distractors, that question is omitted instead of using unrelated
-choices, so a quiz may contain fewer questions than requested. Each generated
-item is validated against its extracted source fact and includes a
-source-backed explanation.
+built-in logic; no external AI service receives the documents. It maps extracted
+concepts using their topic/unit and text similarity, then generates and validates
+source-grounded questions. Conceptual and FBISE-style templates frame source
+facts as computer tasks when the text supports that wording. Question wording,
+target concepts, and answer-option order vary between quizzes. Distractors are
+ranked by topic/unit and text similarity, near-duplicate definitions are
+excluded, and distractor concepts are not reused within a quiz while enough
+related choices remain. If the source does not provide three related
+distractors, that question is omitted instead of using unrelated choices, so a
+quiz may contain fewer questions than requested. Each generated item is
+validated against its extracted source fact and includes a source-backed
+explanation.
 
 Choose a question style template (Balanced, Direct recall, Conceptual, or
 FBISE-style) before generation. The FBISE-style option uses source-grounded,
@@ -76,9 +79,10 @@ applied, and no external AI service is used.
 
 - Choose **Generate MCQs** for any document. The app detects answer-keyed MCQs
   when the source includes four labeled options and a marked correct answer.
-  Detected questions and choices are shown in source order, and the answer key
-  is used to grade student selections; otherwise, new MCQs are generated from
-  the document's source facts.
+  When more questions are detected than requested, the app randomly selects
+  from the answer-keyed bank; the answer key is used to grade student
+  selections. If there are no usable answer-keyed MCQs, new questions are
+  generated from the document's source facts.
 - For automatic detection, put each question and each of its four answer
   choices on separate lines, with choices labeled `A-D` or `1-4`. Correct
   answers can be shown in an `Answer Key` section (for example `1-A, 2-C`),

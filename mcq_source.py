@@ -1,3 +1,4 @@
+import random
 import re
 
 
@@ -312,7 +313,7 @@ def parse_mcq_source(lines):
     return parsed_questions
 
 
-def select_answered_mcqs(questions, num_questions):
+def select_answered_mcqs(questions, num_questions, rng=None):
     answered_questions = [
         question
         for question in questions
@@ -326,4 +327,8 @@ def select_answered_mcqs(questions, num_questions):
             for option in question["options"]
         )
     ]
-    return answered_questions[:num_questions]
+    question_count = min(max(num_questions, 0), len(answered_questions))
+    return (rng or random.SystemRandom()).sample(
+        answered_questions,
+        question_count,
+    )

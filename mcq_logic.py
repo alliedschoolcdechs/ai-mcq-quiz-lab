@@ -182,6 +182,73 @@ def _cosine_similarity(left, right, inverse_frequency):
     return dot_product / (left_norm * right_norm)
 
 
+def build_concept_map(records):
+    token_sets = {
+        record["id"]: _tokens(
+            f"{record['concept']} {record['definition']}"
+        )
+        for record in records
+    }
+    definition_token_sets = {
+        record["id"]: _tokens(record["definition"])
+        for record in records
+    }
+    document_frequency = {}
+    for tokens in token_sets.values():
+        for token in tokens:
+            document_frequency[token] = document_frequency.get(token, 0) + 1
+    total_records = len(records)
+    inverse_frequency = {
+        token: math.log(1 + total_records / (1 + frequency))
+        for token, frequency in document_frequency.items()
+    }
+
+    concept_map = {}
+    for target in records:
+        related_concepts = []
+        for alternative in records:
+            if alternative["id"] == target["id"]:
+                continue
+            similarity = _cosine_similarity(
+                token_sets[target["id"]],
+                token_sets[alternative["id"]],
+                inverse_frequency,
+            )
+            target_unit = target.get("unit_group") or target.get("unit")
+            alternative_unit = (
+                alternative.get("unit_group") or alternative.get("unit")
+            )
+            same_unit = bool(
+                target_unit
+                and alternative_unit
+                and str(target_unit).casefold() == str(alternative_unit).casefold()
+            )
+            definition_tokens = definition_token_sets[alternative["id"]]
+            target_definition_tokens = definition_token_sets[target["id"]]
+            shared_definition_tokens = (
+                definition_tokens & target_definition_tokens
+            )
+            definition_union = definition_tokens | target_definition_tokens
+            definition_overlap = (
+                len(shared_definition_tokens) / len(definition_union)
+                if definition_union else 0.0
+            )
+            if definition_overlap >= 0.9 or not (same_unit or similarity >= 0.1):
+                continue
+            related_concepts.append({
+                "concept": alternative["concept"],
+                "record": alternative,
+                "similarity": similarity,
+                "same_unit": same_unit,
+                "label_overlap": bool(
+                    _tokens(target["concept"])
+                    & _tokens(alternative["concept"])
+                ),
+            })
+        concept_map[target["id"]] = related_concepts
+    return concept_map
+
+
 def _question_for(record, rng, question_style="Balanced"):
     definition = re.sub(r"\s+", " ", record["definition"]).strip().rstrip(".!?")
     scenario_action = None
@@ -195,31 +262,45 @@ def _question_for(record, rng, question_style="Balanced"):
             break
 
     if question_style == "Direct recall":
-        return f"Which computer concept is described by this source fact: {definition}?"
+        return rng.choice((
+            f"Which computer concept is described by this source fact: {definition}?",
+            f"Which concept best matches this textbook description: {definition}?",
+        ))
     if question_style == "Conceptual":
         if scenario_action:
             return rng.choice((
                 f"A computer must {scenario_action}. Which concept provides this capability?",
                 f"Which concept best supports a computer that must {scenario_action}?",
+                f"If a computer needs to {scenario_action}, which concept is most relevant?",
+                f"What concept would address the need to {scenario_action} in a computer?",
             ))
-        return (
+        return rng.choice((
             "A computer must meet this source-backed requirement: "
-            f"{definition}. Which concept best fits?"
-        )
+            f"{definition}. Which concept best fits?",
+            f"Which concept would meet this computer-system requirement: {definition}?",
+            f"A system has this requirement: {definition}. Which concept applies?",
+        ))
     if question_style == "FBISE-style":
         if scenario_action:
-            return (
+            return rng.choice((
                 "A computer system must "
-                f"{scenario_action}. Which concept is the most suitable choice?"
-            )
-        return (
+                f"{scenario_action}. Which concept is the most suitable choice?",
+                "In a system that must "
+                f"{scenario_action}, which concept should be selected?",
+                "A system needs to "
+                f"{scenario_action}. Which concept best meets the requirement?",
+            ))
+        return rng.choice((
             "A computer system must meet this source-backed requirement: "
-            f"{definition}. Which concept should be selected?"
-        )
+            f"{definition}. Which concept should be selected?",
+            f"Which concept should a designer choose for this requirement: {definition}?",
+        ))
     if scenario_action:
         return rng.choice((
             f"Which concept would a computer use to {scenario_action}?",
             f"What concept provides a computer with the ability to {scenario_action}?",
+            f"A computer needs to {scenario_action}. Which concept supports this task?",
+            f"Which computer concept is suited to the task of {scenario_action}?",
         ))
     for pattern, fixed_verb in _ACTION_PATTERNS:
         match = pattern.search(definition)
@@ -241,6 +322,7 @@ def _question_for(record, rng, question_style="Balanced"):
     return rng.choice((
         f"Which concept matches this description: {definition}?",
         f"What concept is described by: {definition}?",
+        f"Which source concept best fits this requirement: {definition}?",
     ))
 
 
@@ -253,7 +335,7 @@ def generate_question_items(
     question_style="Balanced",
 ):
     """Build source-grounded questions with related, document-derived distractors."""
-    rng = rng or random
+    rng = rng or random.SystemRandom()
     difficulty = str(difficulty).casefold()
     if difficulty not in {"easy", "medium", "hard"}:
         raise ValueError("difficulty must be Easy, Medium, or Hard")
@@ -291,25 +373,7 @@ def generate_question_items(
     if len(usable_records) < 4:
         return []
 
-    token_sets = {
-        record["id"]: _tokens(
-            f"{record['concept']} {record['definition']}"
-        )
-        for record in usable_records
-    }
-    definition_token_sets = {
-        record["id"]: _tokens(record["definition"])
-        for record in usable_records
-    }
-    document_frequency = {}
-    for tokens in token_sets.values():
-        for token in tokens:
-            document_frequency[token] = document_frequency.get(token, 0) + 1
-    total_records = len(usable_records)
-    inverse_frequency = {
-        token: math.log(1 + total_records / (1 + frequency))
-        for token, frequency in document_frequency.items()
-    }
+    concept_map = build_concept_map(usable_records)
 
     target_ids = {record["id"] for record in target_records}
     shuffled_targets = [
@@ -325,40 +389,12 @@ def generate_question_items(
     distractor_usage = {}
 
     for target in shuffled_targets:
-        target_tokens = token_sets[target["id"]]
         ranked_distractors = []
-        for alternative in usable_records:
-            if alternative["id"] == target["id"]:
-                continue
-            similarity = _cosine_similarity(
-                target_tokens,
-                token_sets[alternative["id"]],
-                inverse_frequency,
-            )
-            target_unit = target.get("unit_group") or target.get("unit")
-            alternative_unit = (
-                alternative.get("unit_group") or alternative.get("unit")
-            )
-            same_unit = bool(
-                target_unit
-                and alternative_unit
-                and str(target_unit).casefold() == str(alternative_unit).casefold()
-            )
-            label_overlap = bool(
-                _tokens(target["concept"]) & _tokens(alternative["concept"])
-            )
-            definition_tokens = definition_token_sets[alternative["id"]]
-            target_definition_tokens = definition_token_sets[target["id"]]
-            shared_definition_tokens = (
-                definition_tokens & target_definition_tokens
-            )
-            definition_union = definition_tokens | target_definition_tokens
-            definition_overlap = (
-                len(shared_definition_tokens) / len(definition_union)
-                if definition_union else 0.0
-            )
-            if definition_overlap >= 0.9:
-                continue
+        for relation in concept_map[target["id"]]:
+            alternative = relation["record"]
+            similarity = relation["similarity"]
+            same_unit = relation["same_unit"]
+            label_overlap = relation["label_overlap"]
             score = similarity + (0.12 if same_unit else 0.0)
             score += 0.08 if label_overlap else 0.0
             if similarity > 0.88:
@@ -384,10 +420,7 @@ def generate_question_items(
                 item[1],
             )
         )
-        related_distractors = [
-            item for item in ranked_distractors
-            if item[3] or item[4] >= 0.1
-        ]
+        related_distractors = ranked_distractors
         if len(related_distractors) < 3:
             continue
         ranked_distractors = related_distractors

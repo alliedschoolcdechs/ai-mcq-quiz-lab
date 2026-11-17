@@ -924,6 +924,7 @@ def generate_mcqs_from_source(
     distractor_records = [
         record for record, _ in unique_facts if record["id"] not in candidate_ids
     ]
+    report_progress(77, "Mapping concepts by shared topics and source language.")
     report_progress(80, "Generating questions using built-in source-based logic.")
     generated_questions = generate_question_items(
         question_records,
@@ -1895,7 +1896,7 @@ if st.session_state.app_state == "upload":
 
                     update_generation_progress(
                         60,
-                        "Building questions from the selected source content."
+                        "Extracting clean concepts and preparing a source concept map."
                     )
                     questions = generate_mcqs(
                         source_lines,

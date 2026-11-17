@@ -2,6 +2,7 @@ import random
 import unittest
 
 from mcq_logic import (
+    build_concept_map,
     generate_question_items,
     generate_short_answer_items,
     resolve_generation_preferences,
@@ -113,15 +114,15 @@ class SourceGroundedQuestionTests(unittest.TestCase):
         }
 
         self.assertIn(
-            "source fact",
+            "description",
             next(q for q in questions["Direct recall"] if q["answer"] == "RAM")["question"],
         )
         self.assertIn(
-            "must store",
+            "store",
             next(q for q in questions["Conceptual"] if q["answer"] == "RAM")["question"],
         )
         self.assertIn(
-            "most suitable choice",
+            "store",
             next(q for q in questions["FBISE-style"] if q["answer"] == "RAM")["question"],
         )
 
@@ -178,9 +179,43 @@ class SourceGroundedQuestionTests(unittest.TestCase):
         )
 
         ram = next(question for question in questions if question["answer"] == "RAM")
-        self.assertIn("must store", ram["question"])
-        self.assertIn("Which concept", ram["question"])
+        self.assertIn("store", ram["question"])
+        self.assertIn("concept", ram["question"].casefold())
         self.assertNotIn("RAM", ram["question"])
+
+    def test_same_concept_can_produce_different_question_stems(self):
+        question_stems = {
+            generate_question_items(
+                [self.records[0]],
+                1,
+                distractor_records=self.records[1:4],
+                rng=random.Random(seed),
+            )[0]["question"]
+            for seed in range(12)
+        }
+
+        self.assertGreaterEqual(len(question_stems), 3)
+
+    def test_concept_map_links_source_concepts_by_unit_and_meaning(self):
+        unrelated_record = {
+            "id": "F7",
+            "concept": "Water cycle",
+            "definition": (
+                "natural process that circulates water through the "
+                "atmosphere and oceans"
+            ),
+            "unit": "Geography",
+        }
+        concept_map = build_concept_map([*self.records, unrelated_record])
+
+        ram_neighbors = {
+            item["concept"] for item in concept_map["F1"]
+        }
+
+        self.assertIn("ROM", ram_neighbors)
+        self.assertIn("Cache memory", ram_neighbors)
+        self.assertIn("Virtual memory", ram_neighbors)
+        self.assertNotIn("Water cycle", ram_neighbors)
 
     def test_distractor_concepts_do_not_repeat_when_a_large_pool_is_available(self):
         labels = [
