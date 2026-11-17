@@ -305,6 +305,8 @@ if "page_view" not in st.session_state:
     st.session_state.page_view = "home"
 if "admin_authenticated" not in st.session_state:
     st.session_state.admin_authenticated = False
+if "admin_username" not in st.session_state:
+    st.session_state.admin_username = None
 if "attempt_saved" not in st.session_state:
     st.session_state.attempt_saved = False
 if "document_cache" not in st.session_state:
@@ -1339,70 +1341,82 @@ with st.container(key="top_navigation"):
 
 if st.session_state.page_view == "admin_login":
     try:
-        admin_setup_required = not LOCAL_STORAGE.has_admin_password()
+        admin_setup_required = not LOCAL_STORAGE.has_admin_accounts()
     except sqlite3.Error as error:
         st.title("Admin access")
-        st.error(f"Could not read the local admin configuration: {error}")
+        st.error(f"Could not read the admin account configuration: {error}")
         st.stop()
 
     st.title("Set up admin" if admin_setup_required else "Admin sign-in")
     if admin_setup_required:
         st.caption(
-            "Create the first admin password on this computer before sharing "
-            "the app on a school network."
+            "Create the first admin account. Admin usernames and salted password "
+            "hashes are stored in the app database."
         )
     with st.form("admin_access", clear_on_submit=True):
+        entered_username = st.text_input(
+            "Admin username or email",
+            autocomplete="username",
+        )
         entered_password = st.text_input(
-            "Create admin password" if admin_setup_required else "Admin password",
+            "Create password" if admin_setup_required else "Password",
             type="password",
+            autocomplete="new-password" if admin_setup_required else "current-password",
         )
         confirm_password = None
         if admin_setup_required:
             confirm_password = st.text_input(
-                "Confirm admin password",
+                "Confirm password",
                 type="password",
+                autocomplete="new-password",
             )
         submitted = st.form_submit_button(
-            "Create admin password" if admin_setup_required else "Unlock dashboard"
+            "Create admin account" if admin_setup_required else "Sign in"
         )
 
     if submitted:
         if admin_setup_required:
-            if len(entered_password) < 12:
-                st.error("Choose a password with at least 12 characters.")
+            if not entered_username.strip():
+                st.error("Enter an admin username or email address.")
             elif entered_password != confirm_password:
                 st.error("The passwords do not match.")
             else:
                 try:
-                    configured = LOCAL_STORAGE.configure_admin_password(
+                    configured = LOCAL_STORAGE.create_first_admin_account(
+                        entered_username,
                         entered_password
                     )
+                except ValueError as error:
+                    st.error(str(error))
                 except sqlite3.Error as error:
-                    st.error(f"Could not save the admin configuration: {error}")
+                    st.error(f"Could not create the admin account: {error}")
                 else:
                     if configured:
                         st.session_state.admin_authenticated = True
+                        st.session_state.admin_username = entered_username.strip()
                         st.session_state.page_view = "admin"
                         st.rerun()
                     else:
                         st.error(
-                            "An admin password was configured in another session. "
-                            "Sign in with that password."
+                            "An admin account was created in another session. "
+                            "Sign in with that account."
                         )
         else:
             try:
-                authenticated = LOCAL_STORAGE.verify_admin_password(
+                authenticated = LOCAL_STORAGE.verify_admin_account(
+                    entered_username,
                     entered_password
                 )
             except sqlite3.Error as error:
-                st.error(f"Could not verify the admin password: {error}")
+                st.error(f"Could not verify the admin account: {error}")
             else:
                 if authenticated:
                     st.session_state.admin_authenticated = True
+                    st.session_state.admin_username = entered_username.strip()
                     st.session_state.page_view = "admin"
                     st.rerun()
                 else:
-                    st.error("Incorrect admin password.")
+                    st.error("Incorrect admin username or password.")
     st.stop()
 
 if (
@@ -1415,9 +1429,61 @@ if (
 if st.session_state.page_view == "admin":
     st.title("Admin dashboard")
     st.caption(
-        "Saved records are stored in the local SQLite database. "
+        f"Signed in as {st.session_state.admin_username or 'admin'}. "
+        "Saved records and admin accounts are stored in the app's SQLite database. "
         "Times are shown in this computer's local timezone."
     )
+    st.subheader("Admin accounts")
+    try:
+        admin_accounts = LOCAL_STORAGE.list_admin_accounts()
+    except sqlite3.Error as error:
+        st.error(f"Could not load admin accounts: {error}")
+        st.stop()
+    st.dataframe(
+        pd.DataFrame(
+            [
+                {"Username": account["username"], "Created": account["created_at"]}
+                for account in admin_accounts
+            ]
+        ),
+        hide_index=True,
+        use_container_width=True,
+    )
+    st.caption(
+        "New admins sign in with the username and password you provide them. "
+        "Share passwords securely outside this app."
+    )
+    with st.form("add_admin_account", clear_on_submit=True):
+        new_admin_username = st.text_input("New admin username or email")
+        new_admin_password = st.text_input(
+            "New admin password",
+            type="password",
+            autocomplete="new-password",
+        )
+        confirm_new_admin_password = st.text_input(
+            "Confirm new admin password",
+            type="password",
+            autocomplete="new-password",
+        )
+        add_admin_submitted = st.form_submit_button("Add admin")
+
+    if add_admin_submitted:
+        if new_admin_password != confirm_new_admin_password:
+            st.error("The passwords do not match.")
+        else:
+            try:
+                LOCAL_STORAGE.add_admin_account(
+                    new_admin_username,
+                    new_admin_password,
+                )
+            except ValueError as error:
+                st.error(str(error))
+            except sqlite3.Error as error:
+                st.error(f"Could not add the admin account: {error}")
+            else:
+                st.success(f"Added admin account {new_admin_username.strip()}.")
+                st.rerun()
+
     try:
         admin_attempts = LOCAL_STORAGE.list_attempts()
     except sqlite3.Error as error:
@@ -1453,6 +1519,7 @@ if st.session_state.page_view == "admin":
     render_attempt_history(filtered_attempts)
     if st.button("Lock admin dashboard"):
         st.session_state.admin_authenticated = False
+        st.session_state.admin_username = None
         st.session_state.page_view = "home"
         st.rerun()
     st.stop()

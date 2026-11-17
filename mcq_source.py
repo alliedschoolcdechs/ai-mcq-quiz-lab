@@ -48,6 +48,15 @@ TABLE_ANSWER_HEADERS = {
     "correct choice",
     "correct option",
 }
+QUESTION_LIKE_OPTION = re.compile(
+    r"^\s*(?:what|why|how|which|who|when|where)\b|[?？]\s*$",
+    flags=re.IGNORECASE
+)
+INSTRUCTION_STEM = re.compile(
+    r"^\s*(?:write|answer|respond to|complete|solve)\b.*"
+    r"\b(?:following|questions?)\b",
+    flags=re.IGNORECASE
+)
 
 
 def mcq_lines_from_table(headers, rows):
@@ -309,5 +318,12 @@ def select_answered_mcqs(questions, num_questions):
         for question in questions
         if isinstance(question.get("answer"), str)
         and question["answer"] in question.get("options", [])
+        and len(question.get("options", [])) == 4
+        and not INSTRUCTION_STEM.match(str(question.get("question", "")))
+        and not any(
+            not isinstance(option, str)
+            or QUESTION_LIKE_OPTION.search(option)
+            for option in question["options"]
+        )
     ]
     return answered_questions[:num_questions]

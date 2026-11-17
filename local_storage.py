@@ -4,6 +4,7 @@ import json
 import secrets
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -48,6 +49,36 @@ class LocalStorage:
                 )
                 """
             )
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS admin_accounts (
+                    username TEXT PRIMARY KEY COLLATE NOCASE,
+                    salt BLOB NOT NULL,
+                    password_hash BLOB NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            legacy_admin = connection.execute(
+                "SELECT salt, password_hash FROM admin_credentials WHERE id = 1"
+            ).fetchone()
+            has_admin_account = connection.execute(
+                "SELECT 1 FROM admin_accounts LIMIT 1"
+            ).fetchone()
+            if legacy_admin is not None and has_admin_account is None:
+                connection.execute(
+                    """
+                    INSERT INTO admin_accounts (
+                        username, salt, password_hash, created_at
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        "admin",
+                        legacy_admin["salt"],
+                        legacy_admin["password_hash"],
+                        datetime.now(timezone.utc).isoformat(),
+                    ),
+                )
 
     @contextmanager
     def _connect(self):
@@ -146,6 +177,111 @@ class LocalStorage:
                 "SELECT 1 FROM admin_credentials WHERE id = 1"
             ).fetchone()
         return row is not None
+
+    @staticmethod
+    def _normalize_admin_username(username):
+        if not isinstance(username, str):
+            raise ValueError("Enter an admin username or email address.")
+        username = username.strip()
+        if not 3 <= len(username) <= 128:
+            raise ValueError("Admin usernames must be between 3 and 128 characters.")
+        return username
+
+    @staticmethod
+    def _validate_admin_password(password):
+        if not isinstance(password, str) or len(password) < 12:
+            raise ValueError("The admin password must be at least 12 characters.")
+
+    @staticmethod
+    def _hash_admin_password(password, salt):
+        LocalStorage._validate_admin_password(password)
+        return hashlib.pbkdf2_hmac(
+            "sha256",
+            password.encode("utf-8"),
+            salt,
+            LocalStorage._ADMIN_PASSWORD_ITERATIONS,
+        )
+
+    def has_admin_accounts(self):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM admin_accounts LIMIT 1"
+            ).fetchone()
+        return row is not None
+
+    def _insert_admin_account(self, connection, username, password):
+        salt = secrets.token_bytes(16)
+        password_hash = self._hash_admin_password(password, salt)
+        try:
+            connection.execute(
+                """
+                INSERT INTO admin_accounts (
+                    username, salt, password_hash, created_at
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (
+                    username,
+                    salt,
+                    password_hash,
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+        except sqlite3.IntegrityError as error:
+            if "admin_accounts.username" in str(error):
+                raise ValueError(
+                    "An admin account with this username already exists."
+                ) from error
+            raise
+
+    def create_first_admin_account(self, username, password):
+        username = self._normalize_admin_username(username)
+        self._validate_admin_password(password)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute(
+                "SELECT 1 FROM admin_accounts LIMIT 1"
+            ).fetchone() is not None:
+                return False
+            self._insert_admin_account(connection, username, password)
+        return True
+
+    def add_admin_account(self, username, password):
+        username = self._normalize_admin_username(username)
+        self._validate_admin_password(password)
+        with self._connect() as connection:
+            self._insert_admin_account(connection, username, password)
+        return True
+
+    def verify_admin_account(self, username, password):
+        try:
+            username = self._normalize_admin_username(username)
+            self._validate_admin_password(password)
+        except ValueError:
+            return False
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT salt, password_hash
+                FROM admin_accounts
+                WHERE username = ?
+                """,
+                (username,),
+            ).fetchone()
+        if row is None:
+            return False
+        password_hash = self._hash_admin_password(password, row["salt"])
+        return hmac.compare_digest(password_hash, row["password_hash"])
+
+    def list_admin_accounts(self):
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT username, created_at
+                FROM admin_accounts
+                ORDER BY username COLLATE NOCASE
+                """
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def configure_admin_password(self, password):
         if len(password) < 12:

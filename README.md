@@ -16,9 +16,11 @@ for normal local use.
    python run_main.py
    ```
 3. Open `http://127.0.0.1:8501` in a browser on the same computer.
-4. Select **Staff sign-in** and create the first admin password. Choose at
-   least 12 characters. The password is stored as a salted hash in SQLite;
-   the admin dashboard button is shown only in an authenticated admin session.
+4. Select **Staff sign-in** and create the first admin account with a username
+   and a password of at least 12 characters. Passwords are stored as salted
+   hashes in SQLite. Admins can add other named admin accounts from the
+   dashboard. Existing installations with the former shared password can sign
+   in as `admin` using that password.
 
 The launcher binds to `127.0.0.1` by default, so the app is not exposed to the
 local network. The server checks the password before displaying admin records;
@@ -48,19 +50,20 @@ For multiple PCs to share records, run one copy on a school computer and make
 it available only on the trusted school network. The host must stay on. For
 example, set `STREAMLIT_SERVER_ADDRESS=0.0.0.0` before launch and configure
 the host firewall/router to restrict access to the trusted school network.
-Do not expose the app directly to the public internet. The admin password
-protects the dashboard; it does not verify student identities or replace
-network restrictions. If each PC runs its own copy, records remain separate.
+Do not expose the app directly to the public internet. Admin accounts protect
+the dashboard; they do not verify student identities or replace network
+restrictions. If each PC runs its own copy, records remain separate.
 
 ## Quiz generation and source documents
 
 The app generates grounded questions locally from extracted source facts using
-built-in logic. Choose Easy, Medium, or Hard to adjust how closely related the
-source-derived incorrect choices are to the correct concept. Near-duplicate
-definitions are excluded as distractors. Generated items contain a
-concept-driven stem, four choices, a zero-based correct-answer index, and a
-pedagogical explanation. Each item is validated against its extracted source
-fact before it is added to a quiz.
+built-in logic; no external AI service receives the documents. Conceptual and
+FBISE-style templates frame source facts as computer tasks when the text
+supports that wording. Distractors are ranked by topic/unit and text similarity,
+near-duplicate definitions are excluded, and distractor concepts are not reused
+within a quiz while enough related choices remain. Each generated item is
+validated against its extracted source fact and includes a source-backed
+explanation.
 
 Choose a question style template (Balanced, Direct recall, Conceptual, or
 FBISE-style) before generation. The FBISE-style option uses source-grounded,
@@ -121,6 +124,6 @@ attempt saving, the local admin dashboard, and library use work without it.
    ```powershell
    pyinstaller --noconfirm --noconsole --onefile --add-data "app.py;." --add-data "mcq_source.py;." --add-data "mcq_logic.py;." --add-data "library_storage.py;." --add-data "local_storage.py;." --add-data "source_facts.py;." --collect-all streamlit --collect-all fpdf --collect-all pypdf --collect-all docx run_main.py --name "AI_Quiz_Lab"
    ```
-3. Launch `dist/AI_Quiz_Lab.exe` and create the first admin password through
+3. Launch `dist/AI_Quiz_Lab.exe` and create the first admin account through
    **Staff sign-in**. The executable creates its local database and `library/`
    folder beside itself.

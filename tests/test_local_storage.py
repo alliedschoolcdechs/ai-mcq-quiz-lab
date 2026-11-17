@@ -132,6 +132,81 @@ class LocalStorageTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "at least 12 characters"):
             self.storage.configure_admin_password("too-short")
 
+    def test_creates_and_authenticates_multiple_named_admin_accounts(self):
+        self.assertTrue(
+            self.storage.create_first_admin_account(
+                "LeadAdmin",
+                "first-admin-password",
+            )
+        )
+        self.assertTrue(
+            self.storage.add_admin_account(
+                "teacher@example.com",
+                "second-admin-password",
+            )
+        )
+
+        self.assertTrue(
+            self.storage.verify_admin_account(
+                "LEADADMIN",
+                "first-admin-password",
+            )
+        )
+        self.assertTrue(
+            self.storage.verify_admin_account(
+                "Teacher@example.com",
+                "second-admin-password",
+            )
+        )
+        self.assertFalse(
+            self.storage.verify_admin_account(
+                "teacher@example.com",
+                "incorrect-password",
+            )
+        )
+        self.assertEqual(
+            [account["username"] for account in self.storage.list_admin_accounts()],
+            ["LeadAdmin", "teacher@example.com"],
+        )
+
+    def test_only_one_first_admin_can_be_created(self):
+        self.assertTrue(
+            self.storage.create_first_admin_account(
+                "lead",
+                "first-admin-password",
+            )
+        )
+
+        self.assertFalse(
+            self.storage.create_first_admin_account(
+                "another",
+                "second-admin-password",
+            )
+        )
+        self.assertEqual(len(self.storage.list_admin_accounts()), 1)
+
+    def test_rejects_duplicate_admin_username_and_short_password(self):
+        self.storage.create_first_admin_account("lead", "first-admin-password")
+
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            self.storage.add_admin_account("LEAD", "second-admin-password")
+        with self.assertRaisesRegex(ValueError, "at least 12 characters"):
+            self.storage.add_admin_account("another", "too-short")
+
+    def test_migrates_existing_single_admin_password_to_admin_account(self):
+        password = "existing-admin-password"
+        self.storage.configure_admin_password(password)
+
+        migrated_storage = LocalStorage(self.storage.database_path)
+
+        self.assertTrue(
+            migrated_storage.verify_admin_account("admin", password)
+        )
+        self.assertEqual(
+            [account["username"] for account in migrated_storage.list_admin_accounts()],
+            ["admin"],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

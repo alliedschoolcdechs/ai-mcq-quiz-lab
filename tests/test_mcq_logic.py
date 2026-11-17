@@ -98,7 +98,7 @@ class SourceGroundedQuestionTests(unittest.TestCase):
         )
 
         ram = next(question for question in questions if question["answer"] == "RAM")
-        self.assertIn("used to store", ram["question"])
+        self.assertIn("store data", ram["question"])
         self.assertEqual(ram["question_type"], "function")
 
     def test_question_style_changes_generated_stems(self):
@@ -113,15 +113,15 @@ class SourceGroundedQuestionTests(unittest.TestCase):
         }
 
         self.assertIn(
-            "According to the source",
+            "source fact",
             next(q for q in questions["Direct recall"] if q["answer"] == "RAM")["question"],
         )
         self.assertIn(
-            "best explained",
+            "must store",
             next(q for q in questions["Conceptual"] if q["answer"] == "RAM")["question"],
         )
         self.assertIn(
-            "best satisfies this requirement",
+            "most suitable choice",
             next(q for q in questions["FBISE-style"] if q["answer"] == "RAM")["question"],
         )
 
@@ -168,6 +168,67 @@ class SourceGroundedQuestionTests(unittest.TestCase):
         ram = next(question for question in questions if question["answer"] == "RAM")
         memory_concepts = {"RAM", "ROM", "Cache memory", "Virtual memory"}
         self.assertTrue(set(ram["options"]).issubset(memory_concepts))
+
+    def test_conceptual_stem_frames_the_source_fact_as_a_task(self):
+        questions = generate_question_items(
+            self.records,
+            6,
+            rng=random.Random(1),
+            question_style="Conceptual",
+        )
+
+        ram = next(question for question in questions if question["answer"] == "RAM")
+        self.assertIn("A computer must store", ram["question"])
+        self.assertIn("Which concept", ram["question"])
+        self.assertNotIn("RAM", ram["question"])
+
+    def test_distractor_concepts_do_not_repeat_when_a_large_pool_is_available(self):
+        labels = [
+            "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot",
+            "Golf", "Hotel", "India", "Juliett", "Kilo", "Lima", "Mike",
+            "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra",
+            "Tango", "Uniform", "Victor", "Whiskey", "Xray",
+        ]
+        records = [
+            {
+                "id": f"M{index}",
+                "concept": f"Memory concept {label}",
+                "definition": (
+                    f"memory method {label} handles a distinct computer task "
+                    f"using separate hardware resources for the {label} context"
+                ),
+                "unit": "Computer memory",
+            }
+            for index, label in enumerate(labels)
+        ]
+
+        questions = generate_question_items(
+            records,
+            5,
+            rng=random.Random(9),
+        )
+        all_options = [
+            option
+            for question in questions
+            for option in question["options"]
+        ]
+        distractors = [
+            option
+            for question in questions
+            for option in question["options"]
+            if option != question["answer"]
+        ]
+
+        self.assertEqual(len(questions), 5)
+        self.assertEqual(len(distractors), 15)
+        self.assertEqual(
+            len({option.casefold() for option in distractors}),
+            len(distractors),
+        )
+        self.assertEqual(
+            len({option.casefold() for option in all_options}),
+            len(all_options),
+        )
 
     def test_difficulty_changes_distractor_similarity(self):
         easy_questions = generate_question_items(

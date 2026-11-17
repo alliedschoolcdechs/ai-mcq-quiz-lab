@@ -175,6 +175,22 @@ class McqSourceParsingTests(unittest.TestCase):
 
         self.assertEqual(select_answered_mcqs([question], 1), [])
 
+    def test_does_not_treat_short_response_questions_as_mcq_choices(self):
+        parsed = parse_mcq_source([
+            "1. Write answers of the following short response questions.",
+            "A. What is the significance of the Most Significant Bit (MSB)?",
+            "B. What is a binary digit, and why is it fundamental in computer systems?",
+            "C. Why are binary numbers more efficient for computer calculations?",
+            "D. How do ASCII and Unicode differ in character representation?",
+            "Answer Key: 1-A",
+        ])
+
+        self.assertEqual(len(parsed), 1)
+        self.assertEqual(
+            select_answered_mcqs(parsed, 5),
+            [],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

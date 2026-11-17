@@ -35,6 +35,55 @@ _ACTION_PATTERNS = (
     (re.compile(r"\b(?:is|are)\s+responsible\s+for\s+(.+)$", re.IGNORECASE),
      "is responsible for"),
 )
+_SCENARIO_VERBS = {
+    "accepts": "accept",
+    "allows": "allow",
+    "builds": "build",
+    "calculates": "calculate",
+    "classifies": "classify",
+    "communicates": "communicate",
+    "connects": "connect",
+    "controls": "control",
+    "creates": "create",
+    "defines": "define",
+    "determines": "determine",
+    "displays": "display",
+    "enables": "enable",
+    "evaluates": "evaluate",
+    "executes": "execute",
+    "examines": "examine",
+    "groups": "group",
+    "identifies": "identify",
+    "indicates": "indicate",
+    "locates": "locate",
+    "manages": "manage",
+    "measures": "measure",
+    "operates": "operate",
+    "performs": "perform",
+    "prints": "print",
+    "processes": "process",
+    "provides": "provide",
+    "reads": "read",
+    "receives": "receive",
+    "repeats": "repeat",
+    "sends": "send",
+    "stores": "store",
+    "supports": "support",
+    "transforms": "transform",
+    "translates": "translate",
+    "transmits": "transmit",
+    "transfers": "transfer",
+    "uses": "use",
+    "writes": "write",
+}
+_SCENARIO_VERBS.update(
+    {verb: verb for verb in set(_SCENARIO_VERBS.values())}
+)
+_SCENARIO_ACTION_PATTERNS = (
+    re.compile(r"\bused to\s+([a-z]+)\s+(.+)$", re.IGNORECASE),
+    re.compile(r"\b(?:that|which)\s+([a-z]+)\s+(.+)$", re.IGNORECASE),
+    re.compile(r"^\s*([a-z]+)\s+(.+)$", re.IGNORECASE),
+)
 
 QUESTION_STYLES = (
     "Balanced",
@@ -135,21 +184,43 @@ def _cosine_similarity(left, right, inverse_frequency):
 
 def _question_for(record, rng, question_style="Balanced"):
     definition = re.sub(r"\s+", " ", record["definition"]).strip().rstrip(".!?")
+    scenario_action = None
+    for pattern in _SCENARIO_ACTION_PATTERNS:
+        match = pattern.search(definition)
+        if match and match.group(1).casefold() in _SCENARIO_VERBS:
+            scenario_action = (
+                f"{_SCENARIO_VERBS[match.group(1).casefold()]} "
+                f"{match.group(2).rstrip('.!?')}"
+            )
+            break
+
     if question_style == "Direct recall":
-        return (
-            "According to the source, which concept matches this description: "
-            f"{definition}?"
-        )
+        return f"Which computer concept is described by this source fact: {definition}?"
     if question_style == "Conceptual":
+        if scenario_action:
+            return rng.choice((
+                f"A computer must {scenario_action}. Which concept provides this capability?",
+                f"Which concept best supports a computer that must {scenario_action}?",
+            ))
         return (
-            "Which concept is best explained by this source statement: "
-            f"{definition}?"
+            "A computer must meet this source-backed requirement: "
+            f"{definition}. Which concept best fits?"
         )
     if question_style == "FBISE-style":
+        if scenario_action:
+            return (
+                "A computer system must "
+                f"{scenario_action}. Which concept is the most suitable choice?"
+            )
         return (
-            "Which concept best satisfies this requirement: "
-            f"{definition}?"
+            "A computer system must meet this source-backed requirement: "
+            f"{definition}. Which concept should be selected?"
         )
+    if scenario_action:
+        return rng.choice((
+            f"Which concept would a computer use to {scenario_action}?",
+            f"What concept provides a computer with the ability to {scenario_action}?",
+        ))
     for pattern, fixed_verb in _ACTION_PATTERNS:
         match = pattern.search(definition)
         if not match:
@@ -246,12 +317,12 @@ def generate_question_items(
         if record["id"] in target_ids
     ]
     rng.shuffle(shuffled_targets)
+    reserved_answers = {
+        record["concept"].casefold()
+        for record in shuffled_targets[:num_questions]
+    }
     questions = []
     distractor_usage = {}
-    max_reuse = max(
-        3,
-        math.ceil((num_questions * 3) / max(1, total_records - 1)) + 1,
-    )
 
     for target in shuffled_targets:
         target_tokens = token_sets[target["id"]]
@@ -298,7 +369,13 @@ def generate_question_items(
                 score = similarity + (0.12 if same_unit else 0.0)
                 score += 0.08 if label_overlap else 0.0
             ranked_distractors.append(
-                (score, alternative["concept"].casefold(), alternative)
+                (
+                    score,
+                    alternative["concept"].casefold(),
+                    alternative,
+                    same_unit,
+                    similarity,
+                )
             )
 
         ranked_distractors.sort(
@@ -307,13 +384,36 @@ def generate_question_items(
                 item[1],
             )
         )
-        available = [
-            item[2] for item in ranked_distractors
-            if distractor_usage.get(item[2]["concept"].casefold(), 0) < max_reuse
+        related_distractors = [
+            item for item in ranked_distractors
+            if item[3] or item[4] >= 0.1
         ]
-        if len(available) < 3:
-            available = [item[2] for item in ranked_distractors]
-        distractors = available[:3]
+        if len(related_distractors) >= 3:
+            ranked_distractors = related_distractors
+
+        non_answer_distractors = [
+            item for item in ranked_distractors
+            if item[2]["concept"].casefold() not in reserved_answers
+        ]
+        if len(non_answer_distractors) >= 3:
+            ranked_distractors = non_answer_distractors
+
+        unused_distractors = [
+            item for item in ranked_distractors
+            if distractor_usage.get(item[2]["concept"].casefold(), 0) == 0
+        ]
+        if len(unused_distractors) >= 3:
+            selected_distractors = unused_distractors
+        else:
+            selected_distractors = sorted(
+                ranked_distractors,
+                key=lambda item: (
+                    distractor_usage.get(item[2]["concept"].casefold(), 0),
+                    item[0] if difficulty == "easy" else -item[0],
+                    item[1],
+                ),
+            )
+        distractors = [item[2] for item in selected_distractors[:3]]
         if len({item["concept"].casefold() for item in distractors}) < 3:
             continue
 
@@ -336,8 +436,12 @@ def generate_question_items(
             "explanation": (
                 f"{target['concept']} is correct because the source states that "
                 f"{target['definition'].rstrip('.!?')}. The other choices describe "
-                "different source-backed concepts and therefore do not match this "
-                "question."
+                "different concepts: "
+                + "; ".join(
+                    f"{item['concept']} {item['definition'].rstrip('.!?')}"
+                    for item in distractors
+                )
+                + "."
             ),
         })
         for distractor in distractors:
