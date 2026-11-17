@@ -388,8 +388,9 @@ def generate_question_items(
             item for item in ranked_distractors
             if item[3] or item[4] >= 0.1
         ]
-        if len(related_distractors) >= 3:
-            ranked_distractors = related_distractors
+        if len(related_distractors) < 3:
+            continue
+        ranked_distractors = related_distractors
 
         non_answer_distractors = [
             item for item in ranked_distractors

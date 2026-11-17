@@ -74,7 +74,7 @@ class SourceGroundedQuestionTests(unittest.TestCase):
             rng=random.Random(7),
         )
 
-        self.assertEqual(len(questions), 5)
+        self.assertEqual(len(questions), 4)
         for question in questions:
             target = next(
                 record for record in self.records
@@ -178,7 +178,7 @@ class SourceGroundedQuestionTests(unittest.TestCase):
         )
 
         ram = next(question for question in questions if question["answer"] == "RAM")
-        self.assertIn("A computer must store", ram["question"])
+        self.assertIn("must store", ram["question"])
         self.assertIn("Which concept", ram["question"])
         self.assertNotIn("RAM", ram["question"])
 
@@ -229,6 +229,51 @@ class SourceGroundedQuestionTests(unittest.TestCase):
             len({option.casefold() for option in all_options}),
             len(all_options),
         )
+
+    def test_omits_question_when_three_related_distractors_are_unavailable(self):
+        target = {
+            "id": "T1",
+            "concept": "Cache memory",
+            "definition": (
+                "small high-speed memory that stores frequently used data "
+                "near the processor"
+            ),
+        }
+        unrelated_records = [
+            {
+                "id": "U1",
+                "concept": "Water cycle",
+                "definition": (
+                    "natural process that circulates water through the "
+                    "atmosphere and oceans"
+                ),
+            },
+            {
+                "id": "U2",
+                "concept": "Rock formation",
+                "definition": (
+                    "geological process that creates layers of sediment "
+                    "over long periods"
+                ),
+            },
+            {
+                "id": "U3",
+                "concept": "Musical rhythm",
+                "definition": (
+                    "pattern that organizes beats and accents in a musical "
+                    "composition"
+                ),
+            },
+        ]
+
+        questions = generate_question_items(
+            [target],
+            1,
+            distractor_records=unrelated_records,
+            rng=random.Random(3),
+        )
+
+        self.assertEqual(questions, [])
 
     def test_difficulty_changes_distractor_similarity(self):
         easy_questions = generate_question_items(

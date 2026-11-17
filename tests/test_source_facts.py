@@ -138,7 +138,11 @@ class SourceFactExtractionTests(unittest.TestCase):
         )
 
         self.assertEqual(len(facts), 5)
-        self.assertEqual(len(questions), 5)
+        self.assertEqual(len(questions), 4)
+        self.assertNotIn(
+            "CPU",
+            [question["answer"] for question in questions],
+        )
         self.assertTrue(all(len(question["options"]) == 4 for question in questions))
 
 
