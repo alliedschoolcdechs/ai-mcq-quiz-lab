@@ -33,3 +33,25 @@ def attempt_option_lines(options, option_labels, selected_answer, correct_answer
         suffix = f" ({'; '.join(annotations)})" if annotations else ""
         lines.append(f"{label}. {option}{suffix}")
     return lines
+
+
+def training_feedback(question, selected_answer):
+    correct_answer = question.get("answer")
+    explanation = question.get("explanation")
+    if not isinstance(explanation, str) or not explanation.strip():
+        option_explanations = question.get("option_explanations")
+        explanation = (
+            option_explanations.get(correct_answer)
+            if isinstance(option_explanations, dict)
+            else None
+        )
+    if not isinstance(explanation, str) or not explanation.strip():
+        explanation = (
+            f"The document's answer key marks {correct_answer} as correct, "
+            "but it does not include an explanation."
+        )
+    return {
+        "is_correct": selected_answer == correct_answer,
+        "correct_answer": correct_answer,
+        "explanation": explanation,
+    }

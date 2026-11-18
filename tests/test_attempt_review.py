@@ -4,6 +4,7 @@ from attempt_review import (
     attempt_option_lines,
     escape_question_html,
     question_option_labels,
+    training_feedback,
 )
 
 
@@ -48,6 +49,30 @@ class AttemptReviewTests(unittest.TestCase):
         }
 
         self.assertEqual(question_option_labels(question), list("ABCD"))
+
+    def test_training_feedback_shows_source_grounded_explanation(self):
+        question = {
+            "answer": "RAM",
+            "explanation": "RAM stores data and programs currently being processed.",
+        }
+
+        feedback = training_feedback(question, "ROM")
+
+        self.assertFalse(feedback["is_correct"])
+        self.assertEqual(feedback["correct_answer"], "RAM")
+        self.assertEqual(
+            feedback["explanation"],
+            question["explanation"],
+        )
+
+    def test_training_feedback_is_honest_when_imported_mcq_has_no_reason(self):
+        question = {"answer": "Database"}
+
+        feedback = training_feedback(question, "Database")
+
+        self.assertTrue(feedback["is_correct"])
+        self.assertEqual(feedback["correct_answer"], "Database")
+        self.assertIn("does not include an explanation", feedback["explanation"])
 
 
 if __name__ == "__main__":

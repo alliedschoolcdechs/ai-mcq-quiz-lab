@@ -23,6 +23,7 @@ from attempt_review import (
     attempt_option_lines,
     escape_question_html,
     question_option_labels,
+    training_feedback,
 )
 from mcq_logic import (
     QUESTION_STYLES,
@@ -71,11 +72,52 @@ st.markdown("""
         from { opacity: 1; transform: translateY(0); }
         to { opacity: 0; transform: translateY(-8px); }
     }
+    @keyframes answerShine {
+        from {
+            background-position: 0% 50%;
+            box-shadow: 0 0 14px rgba(74, 222, 128, 0.36);
+        }
+        to {
+            background-position: 100% 50%;
+            box-shadow: 0 0 25px rgba(74, 222, 128, 0.72);
+        }
+    }
+    @keyframes answerBreak {
+        0%, 100% { transform: translateX(0) rotate(0); }
+        20% { transform: translateX(-6px) rotate(-1deg); }
+        40% { transform: translateX(6px) rotate(1deg); }
+        60% { transform: translateX(-4px) rotate(-0.5deg); }
+        80% { transform: translateX(3px) rotate(0.5deg); }
+    }
+    @keyframes redGloss {
+        from {
+            background-position: 0% 50%;
+            box-shadow: 0 0 14px rgba(248, 113, 113, 0.34);
+        }
+        to {
+            background-position: 100% 50%;
+            box-shadow: 0 0 24px rgba(248, 113, 113, 0.68);
+        }
+    }
+    @keyframes feedbackReveal {
+        from { opacity: 0; transform: translateY(8px) scale(0.99); }
+        to { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    :root {
+        color-scheme: dark;
+    }
     .stApp,
-    [data-testid="stAppViewContainer"],
-    [data-testid="stHeader"] {
-        background-color: #0b1020;
+    [data-testid="stAppViewContainer"] {
+        background:
+            radial-gradient(ellipse at 12% 4%, rgba(70, 91, 190, 0.28), transparent 38%),
+            radial-gradient(ellipse at 90% 20%, rgba(91, 53, 154, 0.23), transparent 34%),
+            linear-gradient(145deg, #0b1020 0%, #111a2c 52%, #0b1322 100%);
         color: #f0f2f6;
+    }
+    [data-testid="stHeader"] {
+        background: rgba(11, 16, 32, 0.55);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
     }
     [data-testid="stMainBlockContainer"] {
         max-width: 1440px;
@@ -96,18 +138,28 @@ st.markdown("""
     [class*="st-key-top_navigation"] button {
         min-height: 2.4rem;
     }
+    [class*="st-key-upload_panel"],
+    [class*="st-key-setup_panel"],
+    [class*="st-key-quiz_panel"],
+    [class*="st-key-results_panel"] {
+        border: 1px solid rgba(206, 221, 255, 0.15);
+        border-radius: 1.1rem;
+        background: linear-gradient(
+            145deg,
+            rgba(255, 255, 255, 0.085),
+            rgba(255, 255, 255, 0.025)
+        );
+        box-shadow:
+            0 22px 55px rgba(0, 0, 0, 0.24),
+            inset 0 1px 0 rgba(255, 255, 255, 0.09);
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
+    }
     [class*="st-key-upload_panel"] {
         padding: 0.65rem 0.75rem;
-        border: 1px solid #2a3850;
-        border-radius: 1rem;
-        background: #172236;
     }
     [class*="st-key-setup_panel"] {
         padding: 0.65rem 0.75rem;
-        border: 1px solid #2a3850;
-        border-radius: 1.1rem;
-        background: #172236;
-        box-shadow: 0 12px 30px rgba(0, 0, 0, 0.14);
     }
     [class*="st-key-setup_panel"] [data-testid="stForm"] {
         padding: 0;
@@ -131,11 +183,28 @@ st.markdown("""
         background: transparent;
     }
     [class*="st-key-upload_panel"] [data-testid="stFileUploaderDropzone"] {
-        border: 1px dashed #44536c;
+        border: 1px dashed rgba(190, 208, 244, 0.4);
         border-radius: 0.8rem;
-        background: #111a2b;
+        background: rgba(9, 15, 29, 0.35);
         min-height: 4.5rem;
         justify-content: center;
+    }
+    [data-baseweb="input"] > div,
+    [data-baseweb="textarea"] > div,
+    [data-baseweb="select"] > div {
+        border-color: rgba(195, 211, 243, 0.22) !important;
+        background-color: rgba(12, 19, 34, 0.56) !important;
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
+    }
+    [data-testid="stExpander"],
+    [data-testid="stAlert"],
+    [data-testid="stDataFrame"] {
+        border: 1px solid rgba(206, 221, 255, 0.12);
+        border-radius: 0.9rem;
+        background: rgba(255, 255, 255, 0.035);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
     }
     [class*="st-key-upload_panel"] [data-testid="stFileUploaderDropzoneInstructions"] {
         padding: 0.55rem;
@@ -156,12 +225,20 @@ st.markdown("""
     }
     .fade-in-card {
         animation: fadeIn 0.45s ease-out both;
-        background-color: #1b2533;
+        background: linear-gradient(
+            145deg,
+            rgba(255, 255, 255, 0.11),
+            rgba(255, 255, 255, 0.035)
+        );
         color: #f0f2f6;
-        border: 1px solid #344256;
+        border: 1px solid rgba(210, 224, 255, 0.18);
         padding: 24px;
-        border-radius: 12px;
-        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+        border-radius: 1.1rem;
+        box-shadow:
+            0 16px 38px rgba(0, 0, 0, 0.22),
+            inset 0 1px 0 rgba(255, 255, 255, 0.12);
+        backdrop-filter: blur(18px);
+        -webkit-backdrop-filter: blur(18px);
     }
     [class*="st-key-answer_grid_"] {
         display: block;
@@ -185,17 +262,20 @@ st.markdown("""
         padding: 0.45rem 0.8rem;
         text-align: left;
         white-space: normal;
-        border: 1px solid #344256;
-        border-radius: 9px;
+        border: 1px solid rgba(206, 221, 255, 0.18);
+        border-radius: 0.8rem;
         font-size: 0.92rem;
-        background-color: #1b2533;
+        background: rgba(255, 255, 255, 0.055);
         color: #f0f2f6;
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        backdrop-filter: blur(14px);
+        -webkit-backdrop-filter: blur(14px);
         transition: transform 160ms ease, border-color 160ms ease, background-color 160ms ease;
     }
     [class*="st-key-answer_card_"] button:hover {
         transform: scale(1.015);
-        border-color: #60a5fa;
-        background-color: #243449;
+        border-color: rgba(125, 180, 255, 0.75);
+        background: rgba(96, 165, 250, 0.15);
         color: #ffffff;
     }
     [class*="st-key-answer_card_selected_"] button,
@@ -204,6 +284,65 @@ st.markdown("""
         border: 2px solid #4ade80 !important;
         color: #f0fdf4 !important;
         font-weight: 700 !important;
+        box-shadow: 0 0 18px rgba(74, 222, 128, 0.45) !important;
+    }
+    [class*="st-key-answer_card_training_correct_"] button,
+    [class*="st-key-answer_card_training_correct_"] button:hover,
+    [class*="st-key-answer_card_training_correct_"] button:disabled {
+        border: 1px solid rgba(134, 239, 172, 0.92) !important;
+        background: linear-gradient(
+            110deg,
+            rgba(20, 83, 45, 0.9),
+            rgba(34, 197, 94, 0.48),
+            rgba(20, 83, 45, 0.9)
+        ) !important;
+        background-size: 220% 100% !important;
+        color: #f0fdf4 !important;
+        opacity: 1 !important;
+        font-weight: 750 !important;
+        animation: answerShine 1.35s ease-in-out infinite alternate;
+    }
+    [class*="st-key-answer_card_training_wrong_"] button,
+    [class*="st-key-answer_card_training_wrong_"] button:hover,
+    [class*="st-key-answer_card_training_wrong_"] button:disabled {
+        border: 1px solid rgba(252, 165, 165, 0.92) !important;
+        background: linear-gradient(
+            110deg,
+            rgba(127, 29, 29, 0.92),
+            rgba(239, 68, 68, 0.52),
+            rgba(127, 29, 29, 0.92)
+        ) !important;
+        background-size: 220% 100% !important;
+        color: #fff1f2 !important;
+        opacity: 1 !important;
+        font-weight: 750 !important;
+        animation:
+            answerBreak 0.48s ease-out,
+            redGloss 1.5s 0.48s ease-in-out infinite alternate;
+    }
+    .training-feedback {
+        margin: 0.85rem 0 1rem;
+        padding: 1rem 1.15rem;
+        border: 1px solid rgba(206, 221, 255, 0.16);
+        border-radius: 1rem;
+        background: rgba(255, 255, 255, 0.055);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.1);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        animation: feedbackReveal 0.35s ease-out both;
+    }
+    .training-feedback p {
+        margin: 0.45rem 0 0;
+    }
+    .training-feedback-correct {
+        border-color: rgba(74, 222, 128, 0.55);
+        background: linear-gradient(120deg, rgba(20, 83, 45, 0.36), rgba(34, 197, 94, 0.12));
+        box-shadow: 0 0 22px rgba(74, 222, 128, 0.17), inset 0 1px 0 rgba(255, 255, 255, 0.11);
+    }
+    .training-feedback-wrong {
+        border-color: rgba(248, 113, 113, 0.58);
+        background: linear-gradient(120deg, rgba(127, 29, 29, 0.4), rgba(239, 68, 68, 0.12));
+        box-shadow: 0 0 22px rgba(248, 113, 113, 0.17), inset 0 1px 0 rgba(255, 255, 255, 0.11);
     }
     .stApp:has([class*="st-key-next_question_button_"] button:active) [class*="st-key-answer_card_"] {
         animation: fadeOut 0.25s ease-in both;
@@ -212,11 +351,13 @@ st.markdown("""
         max-width: 760px;
         width: 100%;
         margin: 0 auto;
+        padding: 1.15rem;
     }
     [class*="st-key-results_panel"] {
         max-width: 880px;
         width: 100%;
         margin: 0 auto;
+        padding: 1.15rem;
     }
     [class*="st-key-quiz_panel"] .fade-in-card {
         padding: 1.15rem 1.4rem;
@@ -238,8 +379,12 @@ st.markdown("""
         color: #f0f2f6 !important;
     }
     .stButton>button {
-        border-radius: 8px;
+        border: 1px solid rgba(206, 221, 255, 0.16);
+        border-radius: 0.8rem;
         font-weight: 600;
+        background: rgba(255, 255, 255, 0.055);
+        backdrop-filter: blur(12px);
+        -webkit-backdrop-filter: blur(12px);
     }
     .quiz-progress-label {
         margin-bottom: 0.4rem;
@@ -281,6 +426,16 @@ st.markdown("""
         [class*="st-key-upload_panel"] [data-testid="stFileUploaderDropzone"] {
             min-height: 5rem;
         }
+    }
+    @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+    }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -768,6 +923,7 @@ def start_quiz(
     questions,
     student_name,
     student_class,
+    quiz_mode,
     file_name,
     question_source,
     short_answer_questions,
@@ -778,7 +934,7 @@ def start_quiz(
     st.session_state.file_name = file_name
     st.session_state.current_index = 0
     st.session_state.user_answers = {}
-    st.session_state.quiz_mode = "Examination"
+    st.session_state.quiz_mode = quiz_mode
     st.session_state.question_source = question_source
     st.session_state.generation_notice = None
     st.session_state.short_answer_questions = short_answer_questions
@@ -1634,6 +1790,14 @@ if st.session_state.app_state == "upload":
                 "Class:",
                 placeholder="e.g. Grade 9A"
             )
+            quiz_mode = st.selectbox(
+                "Quiz mode",
+                ["Examination", "Training"],
+                help=(
+                    "Training shows the correct answer and explanation after each "
+                    "choice. Examination saves feedback until the quiz is complete."
+                ),
+            )
             num_q = st.slider(
                 "Number of Questions",
                 min_value=3,
@@ -1695,7 +1859,8 @@ if st.session_state.app_state == "upload":
             st.info(
                 "The app generates an MCQ quiz and a separate short-answer study sheet. "
                 "It automatically detects answer-keyed MCQs in the selected document. "
-                "Templates affect generated questions; detected MCQs keep their source wording."
+                "Templates affect generated questions; detected MCQs keep their source wording. "
+                "Training mode gives answer feedback immediately."
             )
 
             page_ranges = st.text_input(
@@ -1982,6 +2147,7 @@ if st.session_state.app_state == "upload":
                         questions,
                         student_name,
                         student_class,
+                        quiz_mode,
                         selected_file_name,
                         question_source,
                         short_answer_questions,
@@ -2042,7 +2208,15 @@ elif st.session_state.app_state == "quiz":
             option_labels = question_option_labels(q)
             for option_index, option in enumerate(q["options"]):
                 is_selected = selected_option == option
-                card_state = "selected_" if is_selected else ""
+                if st.session_state.quiz_mode == "Training" and selected_option is not None:
+                    if option == q.get("answer"):
+                        card_state = "training_correct_"
+                    elif is_selected:
+                        card_state = "training_wrong_"
+                    else:
+                        card_state = ""
+                else:
+                    card_state = "selected_" if is_selected else ""
                 with option_columns[option_index % 2]:
                     with st.container(key=f"answer_card_{card_state}{idx}_{option_index}"):
                         label = (
@@ -2054,10 +2228,29 @@ elif st.session_state.app_state == "quiz":
                             label,
                             key=f"answer_{idx}_{option_index}",
                             use_container_width=True,
-                            type="primary" if is_selected else "secondary"
+                            type="primary" if is_selected else "secondary",
+                            disabled=(
+                                st.session_state.quiz_mode == "Training"
+                                and selected_option is not None
+                            ),
                         ):
                             st.session_state.user_answers[idx] = option
                             st.rerun()
+
+        if st.session_state.quiz_mode == "Training" and selected_option is not None:
+            feedback = training_feedback(q, selected_option)
+            feedback_style = "training-feedback-correct" if feedback["is_correct"] else "training-feedback-wrong"
+            feedback_title = "Correct!" if feedback["is_correct"] else "Not quite"
+            st.markdown(
+                f"""
+                <div class="training-feedback {feedback_style}">
+                    <strong>{feedback_title}</strong>
+                    <p>Correct answer: {escape_question_html(feedback['correct_answer'])}</p>
+                    <p>{escape_question_html(feedback['explanation'])}</p>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
 
         col1, col2 = st.columns([1, 1])
         with col2:

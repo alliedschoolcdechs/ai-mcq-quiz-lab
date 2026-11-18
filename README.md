@@ -77,6 +77,13 @@ FBISE model paper. Optional custom instructions are interpreted locally for
 recognized style and difficulty keywords only. Other instructions are not
 applied, and no external AI service is used.
 
+Choose **Examination** to receive feedback at the end or **Training** to see
+whether each answer is correct immediately, with the correct answer and its
+available explanation. Training locks the selected answer; a correct choice
+glows green, while an incorrect choice briefly shakes and highlights red.
+Imported MCQs without an explanation in the source answer key are identified as
+such rather than given an invented rationale.
+
 - Choose **Generate MCQs** for any document. The app detects answer-keyed MCQs
   when the source includes four labeled options and a marked correct answer.
   When more questions are detected than requested, the app randomly selects
