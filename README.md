@@ -72,6 +72,56 @@ the server environment or Streamlit secrets. The proxy must validate the token
 and forward Ollama's `/api/tags` and `/api/chat` endpoints. Keep the Ollama
 service private; do not expose its unauthenticated API to the public internet.
 
+### Temporary free tunnel from a Windows PC
+
+For testing without a paid server, keep Ollama running on the PC and use
+Cloudflare Quick Tunnel to route the hosted app to the authenticated local proxy.
+The PC, Ollama, proxy, and tunnel must remain online. Quick Tunnel URLs are
+temporary and this is not an always-on production setup.
+
+1. Generate a strong token and store it in the current Windows user's environment:
+
+   ```powershell
+   $bytes = New-Object byte[] 32
+   $rng = [Security.Cryptography.RandomNumberGenerator]::Create()
+   $rng.GetBytes($bytes)
+   $rng.Dispose()
+   $token = [Convert]::ToBase64String($bytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+   [Environment]::SetEnvironmentVariable('OLLAMA_PROXY_TOKEN', $token, 'User')
+   $env:OLLAMA_PROXY_TOKEN = $token
+   ```
+
+2. In one PowerShell window, start the proxy:
+
+   ```powershell
+   .\.venv\Scripts\python.exe ollama_proxy.py
+   ```
+
+3. In a second window, start a Quick Tunnel:
+
+   ```powershell
+   cloudflared tunnel --url http://127.0.0.1:11435
+   ```
+
+4. In Streamlit Cloud, add the printed `https://*.trycloudflare.com` URL and
+   the proxy token to the app's **Settings → Secrets**:
+
+   ```toml
+   OLLAMA_BASE_URL = "https://your-temporary-name.trycloudflare.com"
+   OLLAMA_API_KEY = "your-generated-token"
+   ```
+
+   To copy the token without printing it in the terminal:
+
+   ```powershell
+   [Environment]::GetEnvironmentVariable('OLLAMA_PROXY_TOKEN', 'User') | Set-Clipboard
+   ```
+
+The proxy binds only to `127.0.0.1`, requires the Bearer token, and forwards
+only model-list and chat requests. Never share the token or commit it to Git.
+Quick Tunnel hostnames change when restarted, so update `OLLAMA_BASE_URL` in
+Streamlit Secrets when that happens.
+
 Both generation modes use readable source facts, reject corrupted fragments
 and editorial headings, and require related, document-derived distractors.
 Being in the same section alone is not enough. Generated questions are checked
