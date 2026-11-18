@@ -81,6 +81,7 @@ Choose **Examination** to receive feedback at the end or **Training** to see
 whether each answer is correct immediately, with the correct answer and its
 available explanation. Training locks the selected answer; a correct choice
 glows green, while an incorrect choice briefly shakes and highlights red.
+The incorrect choice and feedback card also show a cracked-glass overlay.
 Imported MCQs without an explanation in the source answer key are identified as
 such rather than given an invented rationale.
 

@@ -105,6 +105,7 @@ st.markdown("""
     }
     :root {
         color-scheme: dark;
+        --glass-crack-pattern: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 420 110' preserveAspectRatio='none'%3E%3Cg fill='none' stroke='%23fff1f2' stroke-width='1.35' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M210 55 191 43 181 28 162 25 145 12 124 11 109 1 M181 28 169 39 153 38 139 52 122 53 111 67 92 70 M162 25 158 12 148 5 M145 12 134 0 M191 43 180 49 169 45 158 38 M210 55 211 36 201 25 211 13 206 1 M211 36 223 27 219 14 233 5 M210 55 232 44 247 30 265 29 279 14 299 13 314 1 M247 30 258 39 273 37 286 51 304 52 318 67 337 69 M265 29 270 16 281 6 M279 14 292 0 M232 44 245 49 257 44 271 39 M210 55 230 62 242 77 259 79 277 93 298 94 313 109 M242 77 252 68 267 70 282 56 301 56 316 42 337 39 M259 79 263 94 275 104 M277 93 291 108 M210 55 208 75 218 88 209 101 213 109 M208 75 196 83 200 97 186 106 M210 55 188 63 174 78 157 79 142 94 123 95 108 109 M174 78 164 69 148 71 135 57 116 56 101 42 82 40 M157 79 153 94 141 104 M142 94 128 109'/%3E%3C/g%3E%3C/svg%3E");
     }
     .stApp,
     [data-testid="stAppViewContainer"] {
@@ -305,6 +306,9 @@ st.markdown("""
     [class*="st-key-answer_card_training_wrong_"] button,
     [class*="st-key-answer_card_training_wrong_"] button:hover,
     [class*="st-key-answer_card_training_wrong_"] button:disabled {
+        position: relative !important;
+        overflow: hidden !important;
+        isolation: isolate;
         border: 1px solid rgba(252, 165, 165, 0.92) !important;
         background: linear-gradient(
             110deg,
@@ -319,6 +323,28 @@ st.markdown("""
         animation:
             answerBreak 0.48s ease-out,
             redGloss 1.5s 0.48s ease-in-out infinite alternate;
+    }
+    [class*="st-key-answer_card_training_wrong_"] button::after,
+    .training-feedback-wrong::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background-image:
+            radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.22), transparent 16%),
+            var(--glass-crack-pattern);
+        background-repeat: no-repeat;
+        background-position: center;
+        background-size: 100% 100%;
+        opacity: 0.92;
+        mix-blend-mode: screen;
+    }
+    [class*="st-key-answer_card_training_wrong_"] button::after {
+        z-index: 1;
+    }
+    [class*="st-key-answer_card_training_wrong_"] button > div {
+        position: relative;
+        z-index: 2;
     }
     .training-feedback {
         margin: 0.85rem 0 1rem;
@@ -340,9 +366,26 @@ st.markdown("""
         box-shadow: 0 0 22px rgba(74, 222, 128, 0.17), inset 0 1px 0 rgba(255, 255, 255, 0.11);
     }
     .training-feedback-wrong {
+        position: relative;
+        overflow: hidden;
+        isolation: isolate;
         border-color: rgba(248, 113, 113, 0.58);
         background: linear-gradient(120deg, rgba(127, 29, 29, 0.4), rgba(239, 68, 68, 0.12));
         box-shadow: 0 0 22px rgba(248, 113, 113, 0.17), inset 0 1px 0 rgba(255, 255, 255, 0.11);
+    }
+    .training-feedback-wrong::after {
+        z-index: 0;
+        opacity: 0.62;
+    }
+    .training-feedback-wrong > * {
+        position: relative;
+        z-index: 1;
+    }
+    .training-feedback-correct {
+        background-size: 220% 100%;
+        animation:
+            feedbackReveal 0.35s ease-out both,
+            answerShine 1.35s 0.35s ease-in-out infinite alternate;
     }
     .stApp:has([class*="st-key-next_question_button_"] button:active) [class*="st-key-answer_card_"] {
         animation: fadeOut 0.25s ease-in both;
