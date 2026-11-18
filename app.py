@@ -1829,9 +1829,9 @@ if st.session_state.app_state == "upload":
                 "Student Name:",
                 placeholder="e.g. Irfan ul Haq"
             )
-            student_class = st.text_input(
+            student_class = st.selectbox(
                 "Class:",
-                placeholder="e.g. Grade 9A"
+                [f"Grade {grade}" for grade in range(6, 11)],
             )
             quiz_mode = st.selectbox(
                 "Quiz mode",
@@ -1935,8 +1935,6 @@ if st.session_state.app_state == "upload":
             status_slot.error("Choose a library book or upload a document first.")
         elif not student_name.strip():
             status_slot.error("Please enter the student's name.")
-        elif not student_class.strip():
-            status_slot.error("Please enter the student's class.")
         elif preview_error:
             status_slot.error(f"Could not prepare the selected book: {preview_error}")
         else:
