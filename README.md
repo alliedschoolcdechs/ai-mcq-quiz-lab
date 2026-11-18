@@ -58,9 +58,12 @@ restrictions. If each PC runs its own copy, records remain separate.
 
 The app generates grounded questions locally from extracted source facts using
 built-in logic; no external AI service receives the documents. It maps extracted
-concepts using their topic/unit and text similarity, then generates and validates
-source-grounded questions. Conceptual and FBISE-style templates frame source
-facts as computer tasks when the text supports that wording. Question wording,
+concepts from readable source facts, rejecting corrupted fragments and
+editorial headings before question generation. Distractors must share meaningful
+concept or definition terms; being in the same section alone is not enough.
+The app then generates and validates source-grounded questions. Conceptual and
+FBISE-style templates frame source facts as computer tasks when the text
+supports that wording. Question wording,
 target concepts, and answer-option order vary between quizzes. Distractors are
 ranked by topic/unit and text similarity, near-duplicate definitions are
 excluded, and distractor concepts are not reused within a quiz while enough

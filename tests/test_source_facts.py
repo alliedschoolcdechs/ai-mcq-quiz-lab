@@ -72,6 +72,141 @@ class SourceFactExtractionTests(unittest.TestCase):
 
         self.assertEqual(facts, [])
 
+    def test_rejects_malformed_extracted_concepts_and_ocr_artifacts(self):
+        source_lines = [
+            {
+                "text": (
+                    "Adocument which exists and is accessible through internet "
+                    "is a webpage, while a set of webpages is a termed as Website."
+                ),
+            },
+            {
+                "text": (
+                    "Words the website is static and once accessed by the user; "
+                    "it will be loaded from the server where you have hosted it."
+                ),
+            },
+            {
+                "text": (
+                    "The installer is an executable file {.exe extension) and "
+                    "you just need to | Visual Studio 2022 double click to start "
+                    "the installation."
+                ),
+            },
+            {
+                "text": (
+                    "Point to note: The website is static and once accessed by "
+                    "the user; it will be loaded from the server where you have "
+                    "hosted it."
+                ),
+            },
+        ]
+
+        self.assertEqual(extract_exam_facts(source_lines), [])
+
+    def test_clean_web_facts_generate_questions_with_related_options(self):
+        source_lines = [
+            {
+                "text": (
+                    "Adocument which exists and is accessible through internet "
+                    "is a webpage, while a set of webpages is a termed as Website."
+                ),
+                "unit": "Web development",
+            },
+            {
+                "text": (
+                    "Words the website is static and once accessed by the user; "
+                    "it will be loaded from the server where you have hosted it."
+                ),
+                "unit": "Web development",
+            },
+            {
+                "text": (
+                    "The installer is an executable file {.exe extension) and "
+                    "you just need to | Visual Studio 2022 double click to start "
+                    "the installation."
+                ),
+                "unit": "Web development",
+            },
+            {
+                "text": (
+                    "A webpage is a document that can be accessed through the "
+                    "internet using a browser."
+                ),
+                "unit": "Web development",
+            },
+            {
+                "text": (
+                    "A website is a collection of related webpages published "
+                    "under a common domain name."
+                ),
+                "unit": "Web development",
+            },
+            {
+                "text": (
+                    "A static website displays the same fixed content to every "
+                    "visitor each time it is opened."
+                ),
+                "unit": "Web development",
+            },
+            {
+                "text": (
+                    "Afront-end of a website is the visible part built with "
+                    "HTML CSS and JavaScript for users."
+                ),
+                "unit": "Web development",
+            },
+            {
+                "text": (
+                    "The back-end of a website processes requests and manages "
+                    "data on the hosting server."
+                ),
+                "unit": "Web development",
+            },
+        ]
+        facts = extract_exam_facts(source_lines)
+        records = [
+            {
+                "id": f"F{index}",
+                "concept": fact["topic"],
+                "definition": definition_fragment(fact),
+                "unit": fact.get("unit"),
+            }
+            for index, fact in enumerate(facts, start=1)
+        ]
+
+        questions = generate_question_items(
+            records,
+            5,
+            rng=random.Random(11),
+        )
+
+        self.assertEqual(
+            {record["concept"] for record in records},
+            {
+                "Webpage",
+                "Website",
+                "Static website",
+                "Front-end of a website",
+                "Back-end of a website",
+            },
+        )
+        self.assertEqual(len(questions), 5)
+        self.assertTrue(
+            all(
+                set(question["options"]).issubset(
+                    {
+                        "Webpage",
+                        "Website",
+                        "Static website",
+                        "Front-end of a website",
+                        "Back-end of a website",
+                    }
+                )
+                for question in questions
+            )
+        )
+
     def test_keeps_clean_acronym_concepts(self):
         source_lines = [{
             "text": (

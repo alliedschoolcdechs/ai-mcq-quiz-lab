@@ -14,6 +14,7 @@ _STOP_WORDS = {
     "before", "being", "between", "both", "but", "can", "could", "does",
     "each", "for", "from", "has", "have", "into", "its", "may", "more",
     "most", "not", "of", "often", "on", "or", "other", "our", "over",
+    "process",
     "same", "should", "some", "such", "than", "that", "the", "their",
     "them", "then", "there", "these", "they", "this", "those", "through",
     "to", "under", "used", "using", "was", "were", "which", "while",
@@ -84,6 +85,17 @@ _SCENARIO_ACTION_PATTERNS = (
     re.compile(r"\b(?:that|which)\s+([a-z]+)\s+(.+)$", re.IGNORECASE),
     re.compile(r"^\s*([a-z]+)\s+(.+)$", re.IGNORECASE),
 )
+_COORDINATED_ACTION_VERBS = "|".join(
+    sorted(
+        (re.escape(verb) for verb in _SCENARIO_VERBS),
+        key=len,
+        reverse=True,
+    )
+)
+_COORDINATED_ACTION_PATTERN = re.compile(
+    rf"\b(?:and|or)\s+(?:{_COORDINATED_ACTION_VERBS})\b",
+    re.IGNORECASE,
+)
 
 QUESTION_STYLES = (
     "Balanced",
@@ -140,11 +152,17 @@ def _normalize_token(token):
     token = token.casefold()
     if len(token) > 5 and token.endswith("ies"):
         return token[:-3] + "y"
-    if len(token) > 5 and token.endswith(("ing", "ed")):
+    if len(token) > 5 and token.endswith("ing"):
         token = token[:-3]
         if len(token) > 3 and token[-1] == token[-2]:
             token = token[:-1]
-    elif len(token) > 4 and token.endswith("es"):
+    elif len(token) > 5 and token.endswith("ed"):
+        token = token[:-2]
+        if len(token) > 3 and token[-1] == token[-2]:
+            token = token[:-1]
+    elif len(token) > 4 and token.endswith(
+        ("ches", "shes", "sses", "xes", "zes")
+    ):
         token = token[:-2]
     elif len(token) > 3 and token.endswith("s"):
         token = token[:-1]
@@ -152,12 +170,18 @@ def _normalize_token(token):
 
 
 def _tokens(text):
-    return {
+    normalized_tokens = {
         normalized
         for token in re.findall(r"[A-Za-z][A-Za-z'-]*", text)
         if (normalized := _normalize_token(token)) not in _STOP_WORDS
         and len(normalized) > 2
     }
+    expanded_tokens = set(normalized_tokens)
+    if "webpage" in normalized_tokens:
+        expanded_tokens.update(("web", "page"))
+    if "website" in normalized_tokens:
+        expanded_tokens.update(("web", "site"))
+    return expanded_tokens
 
 
 def _cosine_similarity(left, right, inverse_frequency):
@@ -228,12 +252,19 @@ def build_concept_map(records):
             shared_definition_tokens = (
                 definition_tokens & target_definition_tokens
             )
+            shared_concept_tokens = (
+                token_sets[target["id"]] & token_sets[alternative["id"]]
+            )
             definition_union = definition_tokens | target_definition_tokens
             definition_overlap = (
                 len(shared_definition_tokens) / len(definition_union)
                 if definition_union else 0.0
             )
-            if definition_overlap >= 0.9 or not (same_unit or similarity >= 0.1):
+            if (
+                definition_overlap >= 0.9
+                or not shared_concept_tokens
+                or (not same_unit and similarity < 0.1)
+            ):
                 continue
             related_concepts.append({
                 "concept": alternative["concept"],
@@ -255,6 +286,8 @@ def _question_for(record, rng, question_style="Balanced"):
     for pattern in _SCENARIO_ACTION_PATTERNS:
         match = pattern.search(definition)
         if match and match.group(1).casefold() in _SCENARIO_VERBS:
+            if _COORDINATED_ACTION_PATTERN.search(match.group(2)):
+                break
             scenario_action = (
                 f"{_SCENARIO_VERBS[match.group(1).casefold()]} "
                 f"{match.group(2).rstrip('.!?')}"

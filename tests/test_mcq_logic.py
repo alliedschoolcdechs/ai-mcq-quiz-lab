@@ -102,6 +102,60 @@ class SourceGroundedQuestionTests(unittest.TestCase):
         self.assertIn("store data", ram["question"])
         self.assertEqual(ram["question_type"], "function")
 
+    def test_compound_function_question_preserves_verb_agreement(self):
+        target = {
+            "id": "B1",
+            "concept": "Back-end",
+            "definition": (
+                "processes requests and manages data on a hosting server"
+            ),
+            "unit": "Web development",
+        }
+        distractors = [
+            {
+                "id": "D1",
+                "concept": "Website",
+                "definition": (
+                    "collection of related webpages hosted on a web server"
+                ),
+                "unit": "Web development",
+            },
+            {
+                "id": "D2",
+                "concept": "Database",
+                "definition": (
+                    "organized collection of data stored and retrieved "
+                    "by a server"
+                ),
+                "unit": "Web development",
+            },
+            {
+                "id": "D3",
+                "concept": "Web server",
+                "definition": (
+                    "computer that stores and delivers webpages to users"
+                ),
+                "unit": "Web development",
+            },
+        ]
+
+        questions = generate_question_items(
+            [target],
+            1,
+            distractor_records=distractors,
+            rng=random.Random(3),
+        )
+
+        self.assertEqual(len(questions), 1)
+        self.assertIn(
+            "processes requests and manages data",
+            questions[0]["question"],
+        )
+        self.assertNotIn(
+            "to process requests and manages data",
+            questions[0]["question"],
+        )
+
     def test_question_style_changes_generated_stems(self):
         questions = {
             style: generate_question_items(
@@ -298,6 +352,43 @@ class SourceGroundedQuestionTests(unittest.TestCase):
                     "pattern that organizes beats and accents in a musical "
                     "composition"
                 ),
+            },
+        ]
+
+        questions = generate_question_items(
+            [target],
+            1,
+            distractor_records=unrelated_records,
+            rng=random.Random(3),
+        )
+
+        self.assertEqual(questions, [])
+
+    def test_does_not_use_same_unit_as_the_only_distractor_relationship(self):
+        target = {
+            "id": "W1",
+            "concept": "Webpage",
+            "definition": "document accessible through an internet connection",
+            "unit": "Web development",
+        }
+        unrelated_records = [
+            {
+                "id": "U1",
+                "concept": "Installer",
+                "definition": "executable program launched to install software",
+                "unit": "Web development",
+            },
+            {
+                "id": "U2",
+                "concept": "Numbered list",
+                "definition": "ordered sequence that displays numerals and letters",
+                "unit": "Web development",
+            },
+            {
+                "id": "U3",
+                "concept": "Point to note",
+                "definition": "reminder that highlights an important instruction",
+                "unit": "Web development",
             },
         ]
 

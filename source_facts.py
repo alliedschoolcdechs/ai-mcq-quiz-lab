@@ -32,14 +32,18 @@ INVALID_CONCEPT_STARTS = {
 
 NON_DEFINITION_STARTS = (
     "ask students", "check whether", "explain why", "remember:", "do not ",
-    "don't ", "what is ", "what are ", "which of ", "why is ", "why are ",
+    "don't ", "point to note", "what is ", "what are ", "which of ",
+    "why is ", "why are ",
 )
 
 
 def is_readable_source_text(text):
     if not isinstance(text, str) or not text.strip():
         return False
-    return not re.search(r"[\[\]<>�]|(?<=[A-Za-z])=(?=[A-Za-z])", text)
+    return not re.search(
+        r"[\[\]{}<>|�]|(?<=[A-Za-z])=(?=[A-Za-z])",
+        text
+    )
 
 
 def extract_exam_facts(source_lines):
@@ -50,6 +54,12 @@ def extract_exam_facts(source_lines):
 
         text = re.sub(r"\s+", " ", source_line["text"]).strip()
         text = re.sub(r"^\s*(?:\d+(?:\.\d+)*[.)]?\s+|[•*-]\s*)", "", text)
+        text = re.sub(
+            r"\bA(?=[a-z]+-[a-z]+\s+(?:of|for)\b)",
+            "A ",
+            text,
+            flags=re.IGNORECASE,
+        )
         if (
             not is_readable_source_text(text)
             or re.search(r"\.{3,}|_{3,}|…{2,}", text)
@@ -154,6 +164,18 @@ def is_valid_concept_label(topic):
         return False
     if words[0].casefold() in INVALID_CONCEPT_STARTS:
         return False
+    if any(
+        word.casefold() in {"and", "but", "because", "which", "while", "who"}
+        for word in words
+    ):
+        return False
+    for index, word in enumerate(words):
+        if word.casefold() in {"a", "an", "the"} and index > 0:
+            if words[index - 1].casefold() not in {
+                "about", "at", "by", "for", "from", "in", "of", "on",
+                "over", "to", "under", "with",
+            }:
+                return False
     if words[-1].casefold() in {
         "a", "an", "are", "as", "at", "be", "can", "for", "from", "in",
         "is", "of", "on", "or", "should", "the", "to", "was", "were", "will"
