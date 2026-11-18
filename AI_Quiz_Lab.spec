@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('app.py', '.'), ('mcq_source.py', '.'), ('mcq_logic.py', '.'), ('library_storage.py', '.'), ('local_storage.py', '.'), ('source_facts.py', '.')]
+datas = [('app.py', '.'), ('mcq_source.py', '.'), ('mcq_logic.py', '.'), ('library_storage.py', '.'), ('local_storage.py', '.'), ('source_facts.py', '.'), ('ollama_generation.py', '.')]
 binaries = []
 hiddenimports = []
 tmp_ret = collect_all('streamlit')

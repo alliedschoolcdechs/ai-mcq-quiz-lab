@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import pandas as pd
 import streamlit as st
+from streamlit.errors import StreamlitSecretNotFoundError
 from fpdf import FPDF
 import requests
 from mcq_source import (
@@ -37,6 +38,11 @@ from library_storage import (
 )
 from local_storage import LocalStorage
 from source_facts import definition_fragment, extract_exam_facts
+from ollama_generation import (
+    OllamaError,
+    generate_mcqs_with_ollama,
+    list_ollama_models,
+)
 
 # Document parsing libraries
 import pypdf
@@ -60,6 +66,21 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="collapsed"
 )
+
+
+@st.cache_data(show_spinner=False, ttl=30, max_entries=1)
+def cached_ollama_models():
+    return list_ollama_models(configured_ollama_base_url())
+
+
+def configured_ollama_base_url():
+    environment_url = os.environ.get("OLLAMA_BASE_URL")
+    if environment_url:
+        return environment_url
+    try:
+        return st.secrets.get("OLLAMA_BASE_URL")
+    except StreamlitSecretNotFoundError:
+        return None
 
 # Custom CSS for a dark theme and animated quiz questions
 st.markdown("""
@@ -1205,6 +1226,9 @@ def generate_mcqs(
     progress_callback=None,
     difficulty="Medium",
     question_style="Balanced",
+    generation_method="Built-in logic",
+    ollama_model=None,
+    custom_instructions="",
 ):
     def report_progress(value, message):
         if progress_callback:
@@ -1257,6 +1281,22 @@ def generate_mcqs(
         if topic_terms
         else f"Preparing {len(candidates)} facts from the selected material"
     )
+    if generation_method == "Ollama AI":
+        if not ollama_model:
+            raise ValueError("Select an installed Ollama model.")
+        return generate_mcqs_with_ollama(
+            candidates,
+            fact_pool,
+            num_questions,
+            ollama_model,
+            report_progress=report_progress,
+            difficulty=difficulty,
+            question_style=question_style,
+            custom_instructions=custom_instructions,
+            base_url=configured_ollama_base_url(),
+        )
+    if generation_method != "Built-in logic":
+        raise ValueError("Choose Built-in logic or Ollama AI for question generation.")
     return generate_mcqs_from_source(
         candidates,
         fact_pool,
@@ -1856,6 +1896,40 @@ if st.session_state.app_state == "upload":
                     "incorrect choices are to the correct concept."
                 ),
             )
+            generation_method = st.selectbox(
+                "Question generation",
+                ["Built-in logic", "Ollama AI"],
+                help=(
+                    "Built-in logic runs without an AI model. Ollama AI uses an "
+                    "installed model on the Ollama server configured for this app."
+                ),
+            )
+            ollama_model = None
+            if generation_method == "Ollama AI":
+                try:
+                    ollama_models = cached_ollama_models()
+                except OllamaError as error:
+                    ollama_models = []
+                    st.warning(
+                        f"{error} Built-in question generation remains available."
+                    )
+                if ollama_models:
+                    ollama_model = st.selectbox(
+                        "Ollama model",
+                        ollama_models,
+                    )
+                else:
+                    st.info(
+                        "No Ollama models are available. Start Ollama and install "
+                        "a model (for example, `ollama pull qwen2.5:7b`), or "
+                        "select Built-in logic."
+                    )
+                st.caption(
+                    "The Ollama server must be reachable from the Streamlit "
+                    "server. Set OLLAMA_BASE_URL in the server environment or "
+                    "Streamlit secrets to use another server; a hosted app cannot "
+                    "access Ollama running only on a student's PC."
+                )
             generation_template = st.selectbox(
                 "Question style",
                 QUESTION_STYLES,
@@ -1871,9 +1945,9 @@ if st.session_state.app_state == "upload":
                     "Example: Make the questions challenging and conceptual."
                 ),
                 help=(
-                    "Local rules recognize difficulty words (easy, medium, hard) "
-                    "and styles (recall, conceptual, application/FBISE). Other "
-                    "instructions are not interpreted; use Topic or unit for focus."
+                    "Built-in logic recognizes difficulty and style keywords only. "
+                    "With Ollama AI, these instructions are also sent to the "
+                    "configured Ollama server."
                 ),
             )
             generation_preferences = resolve_generation_preferences(
@@ -1886,7 +1960,11 @@ if st.session_state.app_state == "upload":
                     "The custom instructions contain conflicting styles or "
                     "difficulty levels; the selected controls will be used."
                 )
-            elif custom_prompt.strip() and not generation_preferences["recognized"]:
+            elif (
+                custom_prompt.strip()
+                and generation_method == "Built-in logic"
+                and not generation_preferences["recognized"]
+            ):
                 st.caption(
                     "No supported control was found in the custom instructions; "
                     "the selected style and difficulty will be used."
@@ -1902,7 +1980,7 @@ if st.session_state.app_state == "upload":
             st.info(
                 "The app generates an MCQ quiz and a separate short-answer study sheet. "
                 "It automatically detects answer-keyed MCQs in the selected document. "
-                "Templates affect generated questions; detected MCQs keep their source wording. "
+                "The generation choice applies to new questions; detected MCQs keep their source wording. "
                 "Training mode gives answer feedback immediately."
             )
 
@@ -2138,6 +2216,9 @@ if st.session_state.app_state == "upload":
                         progress_callback=update_generation_progress,
                         difficulty=generation_preferences["difficulty"],
                         question_style=generation_preferences["question_style"],
+                        generation_method=generation_method,
+                        ollama_model=ollama_model,
+                        custom_instructions=custom_prompt,
                     )
                     short_answer_facts = extract_exam_facts(source_lines)
                     topic_terms = search_terms(topic_unit.strip())

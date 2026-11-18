@@ -56,29 +56,34 @@ restrictions. If each PC runs its own copy, records remain separate.
 
 ## Quiz generation and source documents
 
-The app generates grounded questions locally from extracted source facts using
-built-in logic; no external AI service receives the documents. It maps extracted
-concepts from readable source facts, rejecting corrupted fragments and
-editorial headings before question generation. Distractors must share meaningful
-concept or definition terms; being in the same section alone is not enough.
-The app then generates and validates source-grounded questions. Conceptual and
-FBISE-style templates frame source facts as computer tasks when the text
-supports that wording. Question wording,
-target concepts, and answer-option order vary between quizzes. Distractors are
-ranked by topic/unit and text similarity, near-duplicate definitions are
-excluded, and distractor concepts are not reused within a quiz while enough
-related choices remain. If the source does not provide three related
-distractors, that question is omitted instead of using unrelated choices, so a
-quiz may contain fewer questions than requested. Each generated item is
-validated against its extracted source fact and includes a source-backed
-explanation.
+Choose **Built-in logic** for offline question generation; it does not send
+documents to an AI service. The optional **Ollama AI** mode sends extracted,
+validated source facts to the Ollama server configured for this app. Ollama
+must be running and have a model installed (for example, run
+`ollama pull qwen2.5:7b`). The default endpoint is `http://127.0.0.1:11434`; set
+`OLLAMA_BASE_URL` in the server environment or Streamlit secrets to use another
+reachable Ollama server.
+The app lists installed models for students to choose from. On a hosted
+Streamlit deployment, the configured Ollama server must be reachable from the
+deployment host; it cannot connect to Ollama running only on a student's PC.
+Keep Ollama on a trusted network and do not expose its unauthenticated API to
+the public internet.
+
+Both generation modes use readable source facts, reject corrupted fragments
+and editorial headings, and require related, document-derived distractors.
+Being in the same section alone is not enough. Generated questions are checked
+against the source concept map; if three related choices are unavailable, the
+question is omitted rather than padded with unrelated options. Built-in
+generation uses local concept and question templates. Ollama can write varied,
+conceptual and application-focused stems while the app validates the answer
+concepts and options against the extracted facts.
 
 Choose a question style template (Balanced, Direct recall, Conceptual, or
 FBISE-style) before generation. The FBISE-style option uses source-grounded,
 application-framed wording; it is not a verified match to a specific official
-FBISE model paper. Optional custom instructions are interpreted locally for
-recognized style and difficulty keywords only. Other instructions are not
-applied, and no external AI service is used.
+FBISE model paper. Built-in logic interprets recognized style and difficulty
+keywords in optional custom instructions. Ollama also receives those
+instructions, but source support and answer validation remain required.
 
 Choose **Examination** to receive feedback at the end or **Training** to see
 whether each answer is correct immediately, with the correct answer and its
@@ -140,7 +145,7 @@ attempt saving, the local admin dashboard, and library use work without it.
    ```
 2. Build the executable:
    ```powershell
-   pyinstaller --noconfirm --noconsole --onefile --add-data "app.py;." --add-data "mcq_source.py;." --add-data "mcq_logic.py;." --add-data "library_storage.py;." --add-data "local_storage.py;." --add-data "source_facts.py;." --collect-all streamlit --collect-all fpdf --collect-all pypdf --collect-all docx run_main.py --name "AI_Quiz_Lab"
+   pyinstaller --noconfirm --noconsole --onefile --add-data "app.py;." --add-data "mcq_source.py;." --add-data "mcq_logic.py;." --add-data "library_storage.py;." --add-data "local_storage.py;." --add-data "source_facts.py;." --add-data "ollama_generation.py;." --collect-all streamlit --collect-all fpdf --collect-all pypdf --collect-all docx run_main.py --name "AI_Quiz_Lab"
    ```
 3. Launch `dist/AI_Quiz_Lab.exe` and create the first admin account through
    **Staff sign-in**. The executable creates its local database and `library/`
