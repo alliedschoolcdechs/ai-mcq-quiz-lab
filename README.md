@@ -66,8 +66,11 @@ reachable Ollama server.
 The app lists installed models for students to choose from. On a hosted
 Streamlit deployment, the configured Ollama server must be reachable from the
 deployment host; it cannot connect to Ollama running only on a student's PC.
-Keep Ollama on a trusted network and do not expose its unauthenticated API to
-the public internet.
+For remote hosting, put Ollama behind a TLS-enabled reverse proxy that requires
+Bearer-token authentication, then set `OLLAMA_BASE_URL` and `OLLAMA_API_KEY` in
+the server environment or Streamlit secrets. The proxy must validate the token
+and forward Ollama's `/api/tags` and `/api/chat` endpoints. Keep the Ollama
+service private; do not expose its unauthenticated API to the public internet.
 
 Both generation modes use readable source facts, reject corrupted fragments
 and editorial headings, and require related, document-derived distractors.

@@ -69,10 +69,24 @@ def _get_base_url(base_url=None):
     return value
 
 
-def list_ollama_models(base_url=None):
+def _get_api_headers(api_key=None):
+    value = api_key if api_key is not None else os.environ.get("OLLAMA_API_KEY")
+    if value is None:
+        return {}
+    if not isinstance(value, str) or not value.strip():
+        raise OllamaError("OLLAMA_API_KEY must be a non-empty string.")
+    return {"Authorization": f"Bearer {value.strip()}"}
+
+
+def list_ollama_models(base_url=None, api_key=None):
     base_url = _get_base_url(base_url)
+    headers = _get_api_headers(api_key)
     try:
-        response = requests.get(f"{base_url}/api/tags", timeout=3)
+        response = requests.get(
+            f"{base_url}/api/tags",
+            headers=headers,
+            timeout=3,
+        )
         response.raise_for_status()
     except requests.RequestException as error:
         raise OllamaError(
@@ -100,7 +114,7 @@ def list_ollama_models(base_url=None):
     return models
 
 
-def _request_questions(model, prompt, base_url, timeout):
+def _request_questions(model, prompt, base_url, timeout, api_key=None):
     payload = {
         "model": model,
         "messages": [
@@ -122,6 +136,7 @@ def _request_questions(model, prompt, base_url, timeout):
         response = requests.post(
             f"{base_url}/api/chat",
             json=payload,
+            headers=_get_api_headers(api_key),
             timeout=timeout,
         )
         response.raise_for_status()
@@ -167,6 +182,7 @@ def generate_mcqs_with_ollama(
     base_url=None,
     timeout=300,
     rng=None,
+    api_key=None,
 ):
     def report(value, message):
         if report_progress:
@@ -324,6 +340,7 @@ def generate_mcqs_with_ollama(
         prompt,
         base_url,
         timeout,
+        api_key=api_key,
     )
     report(94, "Validating Ollama questions and source-based choices.")
 

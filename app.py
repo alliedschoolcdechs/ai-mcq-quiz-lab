@@ -69,8 +69,8 @@ st.set_page_config(
 
 
 @st.cache_data(show_spinner=False, ttl=30, max_entries=1)
-def cached_ollama_models():
-    return list_ollama_models(configured_ollama_base_url())
+def cached_ollama_models(base_url, api_key):
+    return list_ollama_models(base_url, api_key)
 
 
 def configured_ollama_base_url():
@@ -81,6 +81,17 @@ def configured_ollama_base_url():
         return st.secrets.get("OLLAMA_BASE_URL")
     except StreamlitSecretNotFoundError:
         return None
+
+
+def configured_ollama_api_key():
+    environment_key = os.environ.get("OLLAMA_API_KEY")
+    if environment_key:
+        return environment_key
+    try:
+        return st.secrets.get("OLLAMA_API_KEY")
+    except StreamlitSecretNotFoundError:
+        return None
+
 
 # Custom CSS for a dark theme and animated quiz questions
 st.markdown("""
@@ -1294,6 +1305,7 @@ def generate_mcqs(
             question_style=question_style,
             custom_instructions=custom_instructions,
             base_url=configured_ollama_base_url(),
+            api_key=configured_ollama_api_key(),
         )
     if generation_method != "Built-in logic":
         raise ValueError("Choose Built-in logic or Ollama AI for question generation.")
@@ -1907,7 +1919,10 @@ if st.session_state.app_state == "upload":
             ollama_model = None
             if generation_method == "Ollama AI":
                 try:
-                    ollama_models = cached_ollama_models()
+                    ollama_models = cached_ollama_models(
+                        configured_ollama_base_url(),
+                        configured_ollama_api_key(),
+                    )
                 except OllamaError as error:
                     ollama_models = []
                     st.warning(
@@ -1928,7 +1943,8 @@ if st.session_state.app_state == "upload":
                     "The Ollama server must be reachable from the Streamlit "
                     "server. Set OLLAMA_BASE_URL in the server environment or "
                     "Streamlit secrets to use another server; a hosted app cannot "
-                    "access Ollama running only on a student's PC."
+                    "access Ollama running only on a student's PC. For a remote "
+                    "server, store its proxy token as OLLAMA_API_KEY."
                 )
             generation_template = st.selectbox(
                 "Question style",

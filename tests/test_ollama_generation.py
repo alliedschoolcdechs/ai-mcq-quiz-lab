@@ -108,6 +108,25 @@ class OllamaGenerationTests(unittest.TestCase):
         )
         mock_get.assert_called_once_with(
             "http://127.0.0.1:11434/api/tags",
+            headers={},
+            timeout=3,
+        )
+
+    @patch("ollama_generation.requests.get")
+    def test_lists_models_with_bearer_authentication(self, mock_get):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"models": [{"name": "qwen2.5:7b"}]}
+        mock_get.return_value = response
+
+        list_ollama_models(
+            "https://ollama.example",
+            api_key="test-token",
+        )
+
+        mock_get.assert_called_once_with(
+            "https://ollama.example/api/tags",
+            headers={"Authorization": "Bearer test-token"},
             timeout=3,
         )
 
@@ -127,6 +146,7 @@ class OllamaGenerationTests(unittest.TestCase):
             "qwen2.5:7b",
             base_url="http://127.0.0.1:11434",
             rng=random.Random(4),
+            api_key="test-token",
         )
 
         self.assertEqual(len(questions), 1)
@@ -139,6 +159,10 @@ class OllamaGenerationTests(unittest.TestCase):
         self.assertEqual(payload["model"], "qwen2.5:7b")
         self.assertFalse(payload["stream"])
         self.assertIsInstance(payload["format"], dict)
+        self.assertEqual(
+            mock_post.call_args.kwargs["headers"],
+            {"Authorization": "Bearer test-token"},
+        )
 
     @patch("ollama_generation.requests.post")
     def test_rejects_distractors_outside_the_source_concept_map(self, mock_post):
